@@ -1367,6 +1367,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn set_client_inset(&self, _inset: Pixels) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;
+    fn register_gpu_painter(&self, fast_registration: crate::GpuPainterRegistration) -> Result<()> {
+        crate::fast::gpu_painter::unavailable(fast_registration)
+    }
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>);
 

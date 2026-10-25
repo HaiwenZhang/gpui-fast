@@ -114,6 +114,7 @@ impl InstanceBufferPool {
 }
 
 pub struct MetalRenderer {
+    pub(crate) fast_gpu: crate::fast::gpu_painter::GpuState,
     pub(crate) device: metal::Device,
     pub(crate) layer: Option<metal::MetalLayer>,
     is_apple_gpu: bool,
@@ -417,6 +418,7 @@ impl MetalRenderer {
         };
 
         Self {
+            fast_gpu: crate::fast::gpu_painter::GpuState::new(&device),
             device,
             layer,
             presents_with_transaction: false,
@@ -521,7 +523,7 @@ impl MetalRenderer {
     }
 
     pub fn destroy(&self) {
-        // nothing to do
+        crate::fast::gpu_painter::destroy(self);
     }
 
     pub fn draw(&mut self, scene: &Scene) {
@@ -1366,7 +1368,7 @@ pub(crate) fn new_command_encoder_for_texture<'a>(
 }
 
 #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
-fn read_texture_to_image(texture: &metal::TextureRef) -> Result<RgbaImage> {
+pub(crate) fn read_texture_to_image(texture: &metal::TextureRef) -> Result<RgbaImage> {
     let width = texture.width() as u32;
     let height = texture.height() as u32;
     let bytes_per_row = width as usize * 4;

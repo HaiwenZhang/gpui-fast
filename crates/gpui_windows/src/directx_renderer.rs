@@ -37,6 +37,7 @@ pub(crate) struct FontInfo {
 }
 
 pub(crate) struct DirectXRenderer {
+    pub(crate) fast_gpu: crate::fast::gpu_painter::GpuState,
     hwnd: HWND,
     pub(crate) atlas: Arc<DirectXAtlas>,
     pub(crate) devices: Option<DirectXRendererDevices>,
@@ -196,6 +197,7 @@ impl DirectXRenderer {
             width: 1,
             height: 1,
             skip_draws: false,
+            fast_gpu: crate::fast::gpu_painter::GpuState::default(),
             fast_frame: crate::fast::frame::FrameState::default(),
             fast_composition: crate::fast::composition::DirectXComposition::default(),
         })
@@ -268,6 +270,7 @@ impl DirectXRenderer {
     }
 
     fn handle_device_lost_impl(&mut self, directx_devices: &DirectXDevices) -> Result<()> {
+        crate::fast::gpu_painter::device_replaced(self);
         crate::fast::layers::release_tiles(self);
         crate::fast::composition::release(self);
         let disable_direct_composition = self.direct_composition.is_none();
@@ -1299,6 +1302,7 @@ pub(crate) struct PathSprite {
 
 impl Drop for DirectXRenderer {
     fn drop(&mut self) {
+        crate::fast::gpu_painter::destroy(self);
         #[cfg(debug_assertions)]
         if let Some(devices) = &self.devices {
             report_live_objects(&devices.device).ok();

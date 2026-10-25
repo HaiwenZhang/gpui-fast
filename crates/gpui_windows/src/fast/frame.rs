@@ -35,6 +35,7 @@ use crate::{DirectXAtlas, DirectXRenderer};
 /// The renderer's gpui-fast state, kept from frame to frame.
 #[derive(Default)]
 pub(crate) struct FrameState {
+    pub(crate) native: crate::fast::gpu_painter::NativeState,
     pub(crate) globals: UploadedGlobals,
     pub(crate) state: DrawState,
     path_vertices: Vec<PathRasterizationSprite>,
@@ -90,7 +91,7 @@ pub(crate) fn draw_batches(renderer: &mut DirectXRenderer, scene: &Scene) -> Res
         .annotation
         .as_ref()
         .is_some_and(|annotation| unsafe { annotation.GetStatus().as_bool() });
-    if capturing && scene.layers.frames.is_empty() {
+    if capturing && scene.layers.frames.is_empty() && scene.gpu_paints.is_empty() {
         return Ok(false);
     }
     let resources = renderer.resources.as_ref().context("resources missing")?;
@@ -153,6 +154,7 @@ pub(crate) fn draw_scene(
     frame: &mut FrameState,
     scene: &Scene,
 ) -> Result<()> {
+    crate::fast::gpu_painter::prepare(target, &mut frame.native, scene)?;
     let result = draw_scene_masked(target, pipelines, frame, scene, None);
     crate::fast::rounded_clip::bind(target, &mut frame.rounded_masks, None)?;
     result
@@ -174,7 +176,15 @@ pub(crate) fn draw_scene_masked(
     frame.state.forget();
     let mut restore_upload = false;
 
-    for batch in scene.batches() {
+    for batch in scene.render_batches() {
+        let batch = match batch {
+            gpui::SceneBatch::Primitive(batch) => batch,
+            gpui::SceneBatch::GpuPaints(range) => {
+                crate::fast::gpu_painter::draw(target, &mut frame.native, scene, range)?;
+                frame.state.forget();
+                continue;
+            }
+        };
         if let PrimitiveBatch::PolychromeSprites {
             texture_id,
             ref range,

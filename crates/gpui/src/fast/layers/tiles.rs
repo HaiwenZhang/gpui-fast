@@ -290,6 +290,14 @@ fn hash_primitive(primitive: &Primitive, tile: &Bounds<ScaledPixels>, hasher: &m
             hash_corners(&sprite.corner_radii, hasher);
             hash_tile(&sprite.tile, hasher);
         }
+        Primitive::FastGpuPaint(surface) => {
+            hasher.write_u8(8);
+            hash_bounds(&surface.bounds, hasher);
+            hash_mask(&surface.content_mask, tile, hasher);
+            hasher.write_usize(std::sync::Arc::as_ptr(&surface.draw.data) as *const () as usize);
+            hasher.write_u32(surface.draw.scale_factor.to_bits());
+            hasher.write_u32(surface.draw.opacity.to_bits());
+        }
         Primitive::Surface(surface) => {
             // A surface's pixels come from outside the scene; layers never
             // hold one (spec §6.5), so it only needs to hash apart.

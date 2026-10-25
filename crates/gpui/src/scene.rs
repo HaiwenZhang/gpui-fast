@@ -50,6 +50,7 @@ pub struct Scene {
     pub subpixel_sprites: Vec<SubpixelSprite>,
     pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
+    pub gpu_paints: crate::fast::gpu_scene::GpuPaints,
     pub(crate) sort_scratch: crate::fast::scene::SortScratch,
     pub(crate) fast_rounded_clip: crate::fast::rounded_clip::SceneClips,
     pub layers: crate::fast::layers::scene::SceneLayers,
@@ -70,6 +71,7 @@ impl Scene {
         self.subpixel_sprites.clear();
         self.polychrome_sprites.clear();
         self.surfaces.clear();
+        crate::fast::gpu_scene::clear(self);
         crate::fast::layers::scene::SceneLayers::clear(&mut self.layers);
     }
 
@@ -133,6 +135,9 @@ impl Scene {
             Primitive::PolychromeSprite(sprite) => {
                 sprite.order = order;
                 self.polychrome_sprites.push(*sprite);
+            }
+            Primitive::FastGpuPaint(surface) => {
+                crate::fast::gpu_scene::insert(self, surface, order)
             }
             Primitive::Surface(surface) => {
                 surface.order = order;
@@ -228,6 +233,7 @@ pub enum Primitive {
     SubpixelSprite(SubpixelSprite),
     PolychromeSprite(PolychromeSprite),
     Surface(PaintSurface),
+    FastGpuPaint(crate::fast::gpu_scene::GpuPaintSurface),
 }
 
 #[expect(missing_docs)]
@@ -242,6 +248,7 @@ impl Primitive {
             Primitive::SubpixelSprite(sprite) => &sprite.bounds,
             Primitive::PolychromeSprite(sprite) => &sprite.bounds,
             Primitive::Surface(surface) => &surface.bounds,
+            Primitive::FastGpuPaint(fast_surface) => &fast_surface.bounds,
         }
     }
 
@@ -255,6 +262,7 @@ impl Primitive {
             Primitive::SubpixelSprite(sprite) => &sprite.content_mask,
             Primitive::PolychromeSprite(sprite) => &sprite.content_mask,
             Primitive::Surface(surface) => &surface.content_mask,
+            Primitive::FastGpuPaint(fast_surface) => &fast_surface.content_mask,
         }
     }
 }

@@ -65,6 +65,7 @@ fn clip_to(primitive: &mut Primitive, mask: &Bounds<ScaledPixels>) {
         Primitive::SubpixelSprite(p) => &mut p.content_mask,
         Primitive::PolychromeSprite(p) => &mut p.content_mask,
         Primitive::Surface(p) => &mut p.content_mask,
+        Primitive::FastGpuPaint(p) => &mut p.content_mask,
     };
     content_mask.bounds = content_mask.bounds.intersect(mask);
 }
@@ -225,6 +226,9 @@ fn describe(primitive: &Primitive) -> String {
             }
         ),
         Primitive::Surface(p) => format!("surface {:?} {:?}", p.bounds, p.content_mask),
+        Primitive::FastGpuPaint(p) => {
+            format!("gpu {:?} {:?} {:?}", p.bounds, p.content_mask, p.draw)
+        }
     }
 }
 

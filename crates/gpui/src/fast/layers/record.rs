@@ -55,7 +55,8 @@ pub(crate) struct LayerRecord {
     pub(crate) views: Rc<[EntityId]>,
     /// Whether the content's overlay cannot be drawn over its tiles: a
     /// list row drew over the overlay of a row before it. Such content is
-    /// drawn into the frame instead.
+    /// drawn into the frame instead. Native GPU paints also require this path
+    /// so their preparation and drawing callbacks run on each frame.
     pub(crate) has_paths: bool,
     /// The paths the content painted, and what it drew over them, in
     /// content space, in drawing order: left out of `content`, and drawn

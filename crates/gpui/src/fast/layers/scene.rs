@@ -354,6 +354,10 @@ pub(crate) fn move_primitive(primitive: &mut Primitive, delta: Point<ScaledPixel
             mv(&mut sprite.bounds);
             mv(&mut sprite.content_mask.bounds);
         }
+        Primitive::FastGpuPaint(surface) => {
+            mv(&mut surface.bounds);
+            mv(&mut surface.content_mask.bounds);
+        }
         Primitive::Surface(surface) => {
             mv(&mut surface.bounds);
             mv(&mut surface.content_mask.bounds);

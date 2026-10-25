@@ -958,7 +958,7 @@ impl MacWindowState {
 
 unsafe impl Send for MacWindowState {}
 
-pub(crate) struct MacWindow(Arc<Mutex<MacWindowState>>, MainThreadMarker);
+pub(crate) struct MacWindow(pub(crate) Arc<Mutex<MacWindowState>>, MainThreadMarker);
 
 impl MacWindow {
     pub fn open(
@@ -2155,6 +2155,13 @@ impl PlatformWindow for MacWindow {
 
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.0.lock().renderer.sprite_atlas().clone()
+    }
+
+    fn register_gpu_painter(
+        &self,
+        fast_registration: gpui::GpuPainterRegistration,
+    ) -> anyhow::Result<()> {
+        crate::fast::gpu_painter::register(self, fast_registration)
     }
 
     fn gpu_specs(&self) -> Option<gpui::GpuSpecs> {

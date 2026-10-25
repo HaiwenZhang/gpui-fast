@@ -137,7 +137,7 @@ pub(crate) struct WgpuPipelines {
 }
 
 /// One frame allocation of instance data, ready to bind.
-struct InstanceBinding {
+pub(crate) struct InstanceBinding {
     bind_group: wgpu::BindGroup,
     /// Index of the allocation's first instance within the bound data. Always
     /// zero on the storage-buffer path, where the binding offset already
@@ -147,8 +147,8 @@ struct InstanceBinding {
     first_instance: u32,
 }
 
-struct InstanceBindings {
-    quads: InstanceBinding,
+pub(crate) struct InstanceBindings {
+    pub(crate) quads: InstanceBinding,
     shadows: InstanceBinding,
     underlines: InstanceBinding,
     monochrome_sprites: InstanceBinding,
@@ -246,6 +246,7 @@ enum RendererState {
 }
 
 pub struct WgpuRenderer {
+    pub(crate) fast_gpu: crate::fast::gpu_painter::GpuState,
     /// Shared GPU context for device recovery coordination (unused on WASM).
     #[allow(dead_code)]
     pub(crate) context: Option<GpuContext>,
@@ -473,6 +474,7 @@ impl WgpuRenderer {
         let core = WgpuRendererCore::new(context, atlas.clone(), surface_format, alpha_mode);
 
         Ok(Self {
+            fast_gpu: crate::fast::gpu_painter::GpuState::default(),
             context: gpu_context,
             compositor_gpu,
             state: RendererState::Ready { surface, core },
@@ -1616,7 +1618,7 @@ impl WgpuRendererCore {
         Ok(submission)
     }
 
-    fn write_instances(
+    pub(crate) fn write_instances(
         &mut self,
         scene: &Scene,
         instance_offset: &mut u64,
@@ -1725,7 +1727,7 @@ impl WgpuRendererCore {
         }
     }
 
-    fn draw_instances(
+    pub(crate) fn draw_instances(
         &self,
         instances: &InstanceBinding,
         pipeline: &wgpu::RenderPipeline,
@@ -2181,6 +2183,7 @@ impl WgpuRenderer {
     }
 
     pub fn destroy(&mut self) {
+        crate::fast::gpu_painter::destroy(self);
         // Release surface-bound GPU resources eagerly so the underlying native
         // window can be destroyed before the renderer itself is dropped.
         self.state = RendererState::Released;
@@ -2209,6 +2212,7 @@ impl WgpuRenderer {
     where
         W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
     {
+        crate::fast::gpu_painter::device_replaced(self);
         let gpu_context = self.context.as_ref().expect("recover requires gpu_context");
 
         // Check if another window already recovered the context
@@ -2262,13 +2266,12 @@ impl WgpuRenderer {
         self.atlas.handle_device_lost(context);
 
         let is_bgr = self.is_bgr;
-        *self = Self::new_internal(
-            Some(gpu_context.clone()),
+        crate::fast::gpu_painter::recover_renderer(
+            self,
+            gpu_context.clone(),
             context,
             surface,
             config,
-            self.compositor_gpu,
-            self.atlas.clone(),
         )?;
         self.set_subpixel_layout(is_bgr);
 
@@ -2281,9 +2284,9 @@ impl WgpuRenderer {
     not(target_family = "wasm"),
     any(test, feature = "bench-support", feature = "test-support")
 ))]
-struct HeadlessRenderTarget {
+pub(crate) struct HeadlessRenderTarget {
     texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    pub(crate) view: wgpu::TextureView,
 }
 
 #[cfg(all(
@@ -2306,7 +2309,7 @@ impl HeadlessRenderTarget {
 pub struct WgpuHeadlessRenderer {
     context: WgpuContext,
     pub(crate) core: WgpuRendererCore,
-    render_target: Option<HeadlessRenderTarget>,
+    pub(crate) render_target: Option<HeadlessRenderTarget>,
     observed_error_generation: u64,
 }
 
@@ -2393,7 +2396,7 @@ impl WgpuHeadlessRenderer {
         Ok(())
     }
 
-    fn render(&mut self, scene: &Scene, size: Size<DevicePixels>) -> anyhow::Result<()> {
+    pub(crate) fn render(&mut self, scene: &Scene, size: Size<DevicePixels>) -> anyhow::Result<()> {
         self.check_gpu_errors()?;
         self.ensure_render_target(size)?;
         let view = self
@@ -2409,7 +2412,7 @@ impl WgpuHeadlessRenderer {
 
     /// Copies the current render target back to the CPU. Dimensions come from the
     /// target texture itself, so the copy can never disagree with what was rendered.
-    fn read_image(&mut self) -> anyhow::Result<image::RgbaImage> {
+    pub(crate) fn read_image(&mut self) -> anyhow::Result<image::RgbaImage> {
         let target = self
             .render_target
             .as_ref()

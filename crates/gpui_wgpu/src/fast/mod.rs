@@ -12,6 +12,7 @@ pub(crate) mod bind_groups;
 pub(crate) mod composition;
 pub(crate) mod frame;
 pub(crate) mod globals;
+pub(crate) mod gpu_painter;
 pub(crate) mod layers;
 pub(crate) mod pass_state;
 pub(crate) mod rounded_clip;

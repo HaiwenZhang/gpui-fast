@@ -696,6 +696,7 @@ fn clip_primitive(primitive: &mut Primitive, viewports: Viewports) {
         Primitive::SubpixelSprite(p) => clip(&mut p.content_mask),
         Primitive::PolychromeSprite(p) => clip(&mut p.content_mask),
         Primitive::Surface(p) => clip(&mut p.content_mask),
+        Primitive::FastGpuPaint(p) => clip(&mut p.content_mask),
     }
 }
 
@@ -751,10 +752,12 @@ fn repaint(
         size: region.size,
     };
     let (content, overlay) = crate::fast::layers::overlay::lift(content);
-    let has_paths = content
-        .paint_operations
-        .iter()
-        .any(|operation| matches!(operation, PaintOperation::Primitive(Primitive::Path(_))));
+    let has_paths = content.paint_operations.iter().any(|operation| {
+        matches!(
+            operation,
+            PaintOperation::Primitive(Primitive::Path(_) | Primitive::FastGpuPaint(_))
+        )
+    });
     let mut visible = painting.viewport.scale(scale_factor);
     visible.origin += to_content;
     let mut rendered_work = 0;

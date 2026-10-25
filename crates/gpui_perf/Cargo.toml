@@ -18,6 +18,10 @@ name = "gpui_perf"
 path = "src/main.rs"
 
 [[example]]
+name = "cad_viewport"
+required-features = ["fast"]
+
+[[example]]
 name = "windows_idle_frames"
 required-features = ["fast"]
 
@@ -68,11 +72,16 @@ smol.workspace = true
 # The native_webview example: a WKWebView on macOS, WebView2 on Windows, and
 # its own wgpu device drawing into a native surface on Linux.
 [dev-dependencies]
+gpui_util.workspace = true
 anyhow.workspace = true
 log.workspace = true
 raw-window-handle.workspace = true
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
+metal.workspace = true
+block2.workspace = true
+objc2.workspace = true
+foreign-types.workspace = true
 cocoa.workspace = true
 objc.workspace = true
 

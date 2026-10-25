@@ -230,6 +230,7 @@ impl Scene {
 #[inline]
 pub(crate) fn sort_in_drawing_order(scene: &mut Scene) {
     crate::fast::rounded_clip_scene::compile(scene);
+    scene.gpu_paints.sort_by_key(|surface| surface.order);
     let scratch = &mut scene.sort_scratch;
     macro_rules! sort {
         ($field:ident, $order:expr) => {

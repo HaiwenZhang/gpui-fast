@@ -5,6 +5,7 @@
 
 use anyhow::{Context as _, Result};
 use gpui::{AtlasTextureId, DevicePixels, LayerFrame, PrimitiveBatch, Scene, Size};
+use gpui_util::ResultExt;
 
 use crate::metal_renderer::{
     InstanceBindings, InstanceBufferWriter, MetalRenderer, new_command_encoder_for_texture,
@@ -85,8 +86,10 @@ pub(crate) fn draw(
     texture: &metal::TextureRef,
     viewport: Size<DevicePixels>,
 ) -> Result<metal::CommandBuffer> {
+    let device = renderer.device.clone();
     let queue = renderer.command_queue.clone();
     let command_buffer = queue.new_command_buffer();
+    let preparation = crate::fast::gpu_painter::prepare(renderer, scene, texture, command_buffer);
     let alpha = if renderer.opaque { 1. } else { 0. };
     let encoder = new_command_encoder_for_texture(
         command_buffer,
@@ -96,6 +99,7 @@ pub(crate) fn draw(
     );
     encode(
         renderer,
+        &device,
         scene,
         bindings,
         writer,
@@ -103,6 +107,7 @@ pub(crate) fn draw(
         viewport,
         command_buffer,
         &mut Vec::new(),
+        &preparation,
         encoder,
     )?
     .end_encoding();
@@ -118,15 +123,18 @@ pub(crate) fn draw_tile(
     commands: &metal::CommandBufferRef,
     background: metal::MTLClearColor,
 ) -> Result<()> {
+    let device = renderer.device.clone();
     let old_texture = renderer.path_intermediate_texture.take();
     let old_msaa = renderer.path_intermediate_msaa_texture.take();
     renderer.update_path_intermediate_textures(viewport);
     let result = (|| {
+        let preparation = crate::fast::gpu_painter::prepare(renderer, scene, texture, commands);
         let bindings = write_instances(scene, writer)?;
         let encoder =
             new_command_encoder_for_texture(commands, texture, viewport, Some(background));
         encode(
             renderer,
+            &device,
             scene,
             &bindings,
             writer,
@@ -134,6 +142,7 @@ pub(crate) fn draw_tile(
             viewport,
             commands,
             &mut Vec::new(),
+            &preparation,
             encoder,
         )?
         .end_encoding();
@@ -147,6 +156,7 @@ pub(crate) fn draw_tile(
 #[allow(clippy::too_many_arguments)]
 fn encode<'a>(
     renderer: &mut MetalRenderer,
+    device: &'a metal::DeviceRef,
     scene: &Scene,
     bindings: &InstanceBindings,
     writer: &mut InstanceBufferWriter,
@@ -154,10 +164,52 @@ fn encode<'a>(
     viewport: Size<DevicePixels>,
     commands: &'a metal::CommandBufferRef,
     clips: &mut Vec<Clip>,
+    preparation: &gpui::GpuScenePreparation,
     mut encoder: &'a metal::RenderCommandEncoderRef,
 ) -> Result<&'a metal::RenderCommandEncoderRef> {
     renderer.fast_layers.note_composited(scene);
-    for batch in scene.batches() {
+    for batch in scene.render_batches() {
+        let batch = match batch {
+            gpui::SceneBatch::Primitive(batch) => batch,
+            gpui::SceneBatch::GpuPaints(range) => {
+                for surface in &scene.gpu_paints[range] {
+                    let Some(mode) = preparation.draw_mode(surface) else {
+                        continue;
+                    };
+                    let target = surface.draw.target(
+                        [texture.width() as u32, texture.height() as u32],
+                        surface.bounds,
+                        surface.content_mask,
+                        texture.sample_count() as u32,
+                    );
+                    let [_, _, width, height] = target.scissor_rect();
+                    if width == 0 || height == 0 {
+                        continue;
+                    }
+                    surface
+                        .draw
+                        .handle
+                        .invoke(|painter| {
+                            renderer.draw_gpu_surface(
+                                painter,
+                                mode,
+                                gpui::MetalPaintContext {
+                                    target,
+                                    device,
+                                    command_buffer: commands,
+                                    color_target: texture,
+                                    color_format: texture.pixel_format(),
+                                },
+                                surface.draw.data.as_ref(),
+                                &mut encoder,
+                                viewport,
+                            )
+                        })
+                        .log_err();
+                }
+                continue;
+            }
+        };
         bind(encoder, clips, &renderer.device);
         match batch {
             PrimitiveBatch::Shadows(range) => {
@@ -197,6 +249,7 @@ fn encode<'a>(
                         let child_bindings = write_instances(child, writer)?;
                         encoder = encode(
                             renderer,
+                            device,
                             child,
                             &child_bindings,
                             writer,
@@ -204,6 +257,7 @@ fn encode<'a>(
                             viewport,
                             commands,
                             clips,
+                            preparation,
                             encoder,
                         )?;
                         clips.pop();

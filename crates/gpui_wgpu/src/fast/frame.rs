@@ -36,6 +36,7 @@ use std::ops::Range;
 
 use anyhow::{Context as _, Result};
 use gpui::{AtlasTextureId, Bounds, PrimitiveBatch, ScaledPixels, Scene};
+use gpui_util::ResultExt;
 
 use crate::WgpuAtlas;
 use crate::fast::bind_groups::BindGroupCache;
@@ -359,8 +360,9 @@ fn plan_paths(
         return;
     }
     let mut group_start = path_batches.len();
-    for batch in scene.batches() {
-        let PrimitiveBatch::Paths(range) = batch else {
+    // Native paints split path batches even when no built-in kind separates them.
+    for batch in scene.render_batches() {
+        let gpui::SceneBatch::Primitive(PrimitiveBatch::Paths(range)) = batch else {
             continue;
         };
         let paths = &scene.paths[range];
@@ -669,6 +671,7 @@ struct DrawStep<'a> {
     scene: &'a Scene,
     upload: &'a SceneUpload,
     batch: PrimitiveBatch,
+    gpu: Option<Range<usize>>,
     clip: Option<usize>,
     path: Option<&'a PathBatch>,
     path_group: Option<Range<u32>>,
@@ -693,7 +696,22 @@ fn collect_steps<'a>(
 ) {
     let mut path_index = 0;
     let mut path_group = None;
-    for batch in scene.batches() {
+    for batch in scene.render_batches() {
+        let batch = match batch {
+            gpui::SceneBatch::Primitive(batch) => batch,
+            gpui::SceneBatch::GpuPaints(range) => {
+                steps.push(DrawStep {
+                    scene,
+                    upload,
+                    batch: PrimitiveBatch::Surfaces(0..0),
+                    gpu: Some(range),
+                    clip: binding,
+                    path: None,
+                    path_group: None,
+                });
+                continue;
+            }
+        };
         if let PrimitiveBatch::PolychromeSprites {
             texture_id,
             ref range,
@@ -746,6 +764,7 @@ fn collect_steps<'a>(
             scene,
             upload,
             batch,
+            gpu: None,
             clip: binding,
             path,
             path_group: path_group.clone(),
@@ -810,9 +829,97 @@ pub(crate) fn draw_scene(
         )
         .then_some(step.path_key())
     });
+    let texture = draw.view.texture();
+    let size = [texture.width(), texture.height()];
+    let preparation = gpui::prepare_gpu_scene(
+        draw.scene,
+        size,
+        texture.sample_count(),
+        gpui::GpuBackend::Wgpu.capabilities(),
+        |painter, primitive, target_info, phase| {
+            let mut context = gpui::GpuPrepareContext::Wgpu(gpui::WgpuPrepareContext {
+                target: target_info,
+                device: target.device,
+                queue: target.queue,
+                encoder,
+                color_format: target.format,
+            });
+            match phase {
+                gpui::GpuPreparationPhase::Prepare => {
+                    painter.prepare_erased(&mut context, primitive.data.as_ref())
+                }
+                gpui::GpuPreparationPhase::FinishPrepare => {
+                    painter.finish_prepare_erased(&mut context, primitive.data.as_ref())
+                }
+            }
+        },
+    );
     let mut pass = begin_main_pass(encoder, draw.view, draw.label, draw.clear);
     let mut bound = PassState::default();
     for step in steps {
+        if let Some(range) = step.gpu {
+            for surface in &step.scene.gpu_paints[range] {
+                let Some(mode) = preparation.draw_mode(surface) else {
+                    continue;
+                };
+                let paint_target = surface.draw.target(
+                    size,
+                    surface.bounds,
+                    surface.content_mask,
+                    texture.sample_count(),
+                );
+                let [_, _, width, height] = paint_target.scissor_rect();
+                if width == 0 || height == 0 {
+                    continue;
+                }
+                match mode {
+                    gpui::GpuDrawMode::SharedPass => {
+                        surface
+                            .draw
+                            .handle
+                            .invoke(|painter| {
+                                crate::fast::gpu_painter::draw_in_pass(
+                                    target.device,
+                                    target.format,
+                                    painter,
+                                    paint_target,
+                                    surface.draw.data.as_ref(),
+                                    &mut pass,
+                                )
+                            })
+                            .log_err();
+                    }
+                    gpui::GpuDrawMode::OwnPass => {
+                        drop(pass);
+                        surface
+                            .draw
+                            .handle
+                            .invoke(|painter| {
+                                painter.paint_erased(
+                                    &mut gpui::GpuPaintContext::Wgpu(gpui::WgpuPaintContext {
+                                        target: paint_target,
+                                        device: target.device,
+                                        encoder,
+                                        color_target: draw.view,
+                                        color_format: target.format,
+                                    }),
+                                    surface.draw.data.as_ref(),
+                                )
+                            })
+                            .log_err();
+                        pass = begin_main_pass(
+                            encoder,
+                            draw.view,
+                            "main_pass_after_gpu_painter",
+                            None,
+                        );
+                    }
+                }
+                // Painter pipelines and bindings invalidate every cached UI state entry.
+                bound.forget();
+            }
+            continue;
+        }
         let path_key = step.path_key();
         let upload = step.upload;
         let scene = step.scene;

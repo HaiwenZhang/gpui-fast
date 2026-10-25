@@ -151,6 +151,18 @@ unchanged, and a new entry needs as good a reason.
   `fast::layout::MeasuredTaffy`, which lays each leaf out around GPUI's
   measurement as 0.13 did. When upstream moves to 0.14 or later, the sync
   takes its version and drops `MeasuredTaffy`.
+- Native GPU painters, ported on the `native-gpu` branch at the user's request
+  from the four custom renderer commits ending at `9c2861ccaa` in
+  `Pomelo-Native/references/zed`: `Window::register_gpu_painter` and
+  `Window::paint_gpu`, the `GpuPainter` trait and typed handle, backend contexts,
+  draw modes/capabilities/status, and hidden renderer dispatch/registration helpers.
+  `PlatformWindow::register_gpu_painter` has a default unsupported implementation.
+  `Scene::insert_gpu_paint`, `Scene::render_batches`, its native paint storage and
+  `Primitive::FastGpuPaint` preserve drawing order and retained replay across
+  renderer crates. Metal and WGPU expose painter registration methods; D3D11
+  registers through its window. The backend feature flags enable native context
+  types without forcing every graphics API into all consumers. Implementation,
+  tests and methods live in `fast/`; see [Native GPU painters](native-gpu.md).
 - Window composition, the API of
   [zed#62379](https://github.com/zed-industries/zed/pull/62379), which
   upstream has not merged yet: native views drawn between a window's GPUI
