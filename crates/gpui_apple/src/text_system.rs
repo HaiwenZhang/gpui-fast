@@ -77,7 +77,6 @@ struct AppleTextSystemState {
     font_ids_by_postscript_name: HashMap<String, FontId>,
     font_ids_by_font_key: HashMap<FontKey, SmallVec<[FontId; 4]>>,
     postscript_names_by_font_id: HashMap<FontId, String>,
-    sized_fonts: crate::fast::text_system::SizedFonts,
 }
 
 impl AppleTextSystem {
@@ -91,7 +90,6 @@ impl AppleTextSystem {
             font_ids_by_postscript_name: HashMap::default(),
             font_ids_by_font_key: HashMap::default(),
             postscript_names_by_font_id: HashMap::default(),
-            sized_fonts: crate::fast::text_system::SizedFonts::default(),
         }))
     }
 }
@@ -575,12 +573,7 @@ impl AppleTextSystemState {
                     string.set_attribute(
                         cf_range,
                         kCTFontAttributeName,
-                        &crate::fast::text_system::SizedFonts::get(
-                            &mut self.sized_fonts,
-                            run.font_id,
-                            font,
-                            font_size,
-                        ),
+                        &font.native_font().clone_with_font_size(font_size.into()),
                     );
                 }
                 break_ligature = !break_ligature;

@@ -12,7 +12,6 @@ mod app;
 mod arena;
 mod asset_cache;
 mod assets;
-#[path = "fast/bounds_tree.rs"]
 mod bounds_tree;
 mod color;
 /// The default colors used by GPUI.
@@ -22,7 +21,6 @@ mod debug_overlay;
 mod element;
 mod elements;
 mod executor;
-mod fast;
 mod platform_scheduler;
 pub(crate) use platform_scheduler::PlatformScheduler;
 mod geometry;
@@ -114,53 +112,6 @@ pub use debug_overlay::*;
 pub use element::*;
 pub use elements::*;
 pub use executor::*;
-pub use fast::composition::{
-    ComposedScene, ComposedSceneLayer, CompositionSurfaceId, CompositionSurfaceKind,
-    PlatformCompositionSurface, PlatformCompositionSurfaceContent, PlatformSurfaceAttachment,
-    WindowComposition, WindowCompositionSurface,
-};
-#[cfg(all(feature = "gpu-d3d11", target_os = "windows"))]
-pub use fast::gpu_context::D3D11PaintContext;
-#[cfg(all(feature = "gpu-d3d11", target_os = "windows"))]
-pub use fast::gpu_context::D3D11PrepareContext;
-pub use fast::gpu_context::GpuPaintContext;
-pub use fast::gpu_context::GpuPassContext;
-pub use fast::gpu_context::GpuPrepareContext;
-#[cfg(all(feature = "gpu-metal", any(target_os = "macos", target_os = "ios")))]
-pub use fast::gpu_context::MetalDrawContext;
-#[cfg(all(feature = "gpu-metal", any(target_os = "macos", target_os = "ios")))]
-pub use fast::gpu_context::MetalPaintContext;
-#[cfg(all(feature = "gpu-metal", any(target_os = "macos", target_os = "ios")))]
-pub use fast::gpu_context::MetalPrepareContext;
-#[cfg(feature = "gpu-wgpu")]
-pub use fast::gpu_context::WgpuDrawContext;
-#[cfg(feature = "gpu-wgpu")]
-pub use fast::gpu_context::WgpuPaintContext;
-#[cfg(feature = "gpu-wgpu")]
-pub use fast::gpu_context::WgpuPrepareContext;
-pub use fast::gpu_painter::AnyGpuPainterHandle;
-pub use fast::gpu_painter::ErasedGpuPainter;
-pub use fast::gpu_painter::GpuBackend;
-pub use fast::gpu_painter::GpuCapabilities;
-pub use fast::gpu_painter::GpuDrawMode;
-pub use fast::gpu_painter::GpuPaintPreparation;
-pub use fast::gpu_painter::GpuPaintPrimitive;
-pub use fast::gpu_painter::GpuPaintTarget;
-pub use fast::gpu_painter::GpuPainter;
-pub use fast::gpu_painter::GpuPainterHandle;
-pub use fast::gpu_painter::GpuPainterRegistration;
-pub use fast::gpu_painter::GpuPainterRegistry;
-pub use fast::gpu_painter::GpuPainterStatus;
-pub use fast::gpu_painter::GpuPreparationPhase;
-pub use fast::gpu_painter::GpuResetReason;
-pub use fast::gpu_painter::prepare_gpu_paints;
-pub use fast::gpu_painter::{GpuScenePreparation, prepare_gpu_scene};
-pub use fast::layers::scene::{
-    LAYER_TILE_TEXTURE_BASE, LayerContent, LayerFrame, LayerKey, SceneLayers, TileCoord,
-    decode_layer_tile, layer_tile_id, layer_tile_texture_id,
-};
-#[cfg(any(test, feature = "test-support"))]
-pub use fast::stats::LayoutStats;
 pub use geometry::*;
 pub use gestures::*;
 pub use global::*;
@@ -234,8 +185,6 @@ macro_rules! bench_main {
         $crate::bench_main!(allocator = ::std::alloc::System; $($groups)*);
     };
 }
-pub use fast::gpu_scene::GpuPaintSurface;
-pub use fast::gpu_scene::SceneBatch;
 pub use gpui_shared_string::*;
 pub use gpui_util::arc_cow::ArcCow;
 pub use http_client;

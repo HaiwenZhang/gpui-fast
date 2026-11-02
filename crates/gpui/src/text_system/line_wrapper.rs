@@ -62,7 +62,6 @@ impl LineWrapper {
         let mut last_candidate_width = px(0.);
         let mut last_wrap_ix = 0;
         let mut prev_c = '\0';
-        let mut fast_prev_char = '\0';
         let mut index = 0;
         let mut candidates = fragments
             .iter()
@@ -86,10 +85,7 @@ impl LineWrapper {
                             }
                         } else {
                             // CJK may not be space separated, e.g.: `Hello world你好世界`
-                            if c != ' '
-                                && first_non_whitespace_ix.is_some()
-                                && crate::fast::line_break::allows_break_between(fast_prev_char, c)
-                            {
+                            if c != ' ' && first_non_whitespace_ix.is_some() {
                                 last_candidate_ix = ix;
                                 last_candidate_width = width;
                             }
@@ -100,7 +96,6 @@ impl LineWrapper {
                         }
 
                         new_prev_c = c;
-                        fast_prev_char = c;
 
                         self.width_for_char(c)
                     }
@@ -116,10 +111,6 @@ impl LineWrapper {
                         if first_non_whitespace_ix.is_none() {
                             first_non_whitespace_ix = Some(ix);
                         }
-
-                        // An element is no punctuation: the text after it
-                        // may break as if it started the line.
-                        fast_prev_char = '\0';
 
                         element_width
                     }
@@ -442,10 +433,7 @@ impl LineWrapper {
                     last_candidate_ix = ix;
                     last_candidate_width = width;
                 }
-            } else if c != ' '
-                && first_non_whitespace_ix.is_some()
-                && crate::fast::line_break::allows_break_between(prev_c, c)
-            {
+            } else if c != ' ' && first_non_whitespace_ix.is_some() {
                 last_candidate_ix = ix;
                 last_candidate_width = width;
             }

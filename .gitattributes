@@ -1,3 +1,9 @@
+# Pristine upstream checks compare bytes on every host, including Windows.
+* text=auto eol=lf
+
+# Unified diffs use a single space as the context marker for empty source lines.
+integration/patches/*.patch whitespace=-blank-at-eol
+
 # Prevent GitHub from displaying comments within JSON files as errors.
 *.json linguist-language=JSON-with-Comments
 

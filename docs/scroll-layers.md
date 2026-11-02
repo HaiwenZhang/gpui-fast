@@ -255,21 +255,21 @@ them out afresh.
 
 ## Verifying
 
-- `cargo test -p gpui --features test-support --lib fast::tests::layers`
+- `python3 script/cargo test -p gpui --features test-support --lib fast::tests::layers`
   includes the layer oracle (`fast/tests/layers_oracle.rs`). It runs random
   histories of wheel scrolls (including fractional deltas at scale 1.25),
   hovers, clicks, keys and content changes through a window with layers and a
   window without. Every frame it compares the expanded scenes, hit tests and
   the positions listeners observe.
-- `cargo test -p gpui_wgpu` compares rasterized and composited tiles with
+- `python3 script/cargo test -p gpui_wgpu` compares rasterized and composited tiles with
   direct drawing, byte for byte, on a surfaceless device.
-- `cargo test -p gpui_apple fast::layers` does the same on macOS with a
-  headless Metal renderer (`crates/gpui_apple/src/fast/layers/`), which draws
+- `python3 script/cargo test -p gpui_apple fast::layers` does the same on macOS with a
+  headless Metal renderer (`fast/gpui_apple/src/layers/`), which draws
   tiles as the wgpu renderer does.
-- `cargo test -p gpui_windows --features test-support fast::layers` does the
+- `python3 script/cargo test -p gpui_windows --features test-support fast::layers` does the
   same for the Direct3D 11 renderer (`gpui_windows/src/fast/layers/`), on a
   hardware device or WARP, on Windows.
-- `cargo run -p gpui_perf --release -- --headless --verify` also runs the
+- `python3 script/cargo run -p gpui_perf --release -- --headless --verify` also runs the
   scroll scenarios with layers on and off.
 
 ## Measuring
@@ -329,6 +329,6 @@ Refresh workloads can be measured with the same release build using
 (default 16), and switching only `GPUI_SCROLL_LAYERS`. For example:
 
 ```sh
-GPUI_PERF_STREAM_MS=133 cargo run -p gpui_perf --release -- --auto --only WorkspaceScroll --retention on --frames 600
-GPUI_PERF_STREAM_MS=133 GPUI_SCROLL_LAYERS=0 cargo run -p gpui_perf --release -- --auto --only WorkspaceScroll --retention on --frames 600
+GPUI_PERF_STREAM_MS=133 python3 script/cargo run -p gpui_perf --release -- --auto --only WorkspaceScroll --retention on --frames 600
+GPUI_PERF_STREAM_MS=133 GPUI_SCROLL_LAYERS=0 python3 script/cargo run -p gpui_perf --release -- --auto --only WorkspaceScroll --retention on --frames 600
 ```

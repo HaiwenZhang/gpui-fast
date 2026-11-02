@@ -1278,23 +1278,6 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn on_appearance_changed(&self, callback: Box<dyn FnMut()>);
     fn on_button_layout_changed(&self, _callback: Box<dyn FnMut()>) {}
     fn draw(&self, scene: &Scene);
-    fn draw_composed(&self, scene: crate::fast::composition::ComposedScene<'_>) {
-        crate::fast::composition::draw_uncomposed(self, scene)
-    }
-    fn enable_window_composition(&self) -> Result<()> {
-        crate::fast::composition::unsupported("window composition")
-    }
-    fn create_native_surface(
-        &self,
-    ) -> Result<Rc<dyn crate::fast::composition::PlatformSurfaceAttachment>> {
-        crate::fast::composition::unsupported("native surface portals")
-    }
-    fn set_composition_order(
-        &self,
-        _fast_surfaces: &[crate::fast::composition::PlatformCompositionSurface],
-    ) -> Result<()> {
-        crate::fast::composition::unsupported("surface ordering")
-    }
     fn schedule_frame(&self) {}
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
     fn is_subpixel_rendering_supported(&self) -> bool;
@@ -1367,9 +1350,6 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn set_client_inset(&self, _inset: Pixels) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;
-    fn register_gpu_painter(&self, fast_registration: crate::GpuPainterRegistration) -> Result<()> {
-        crate::fast::gpu_painter::unavailable(fast_registration)
-    }
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>);
 

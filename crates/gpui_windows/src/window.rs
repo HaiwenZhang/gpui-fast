@@ -55,7 +55,6 @@ pub struct WindowsWindowState {
 
     pub callbacks: Callbacks,
     pub frame_signal: Arc<PlatformFrameSignal>,
-    pub(crate) fast_frame_request: Arc<crate::fast::frame_schedule::FrameRequest>,
     pub input_handler: Cell<Option<PlatformInputHandler>>,
     pub ime_enabled: Cell<bool>,
     pub pending_surrogate: Cell<Option<u16>>,
@@ -156,10 +155,8 @@ impl WindowsWindowState {
         let fullscreen = None;
         let initial_placement = None;
 
-        let fast_frame_request = crate::fast::frame_schedule::new_request(&draw_coordinator);
-        let direct_manipulation =
-            DirectManipulationHandler::new(hwnd, scale_factor, Arc::clone(&fast_frame_request))
-                .context("initializing Direct Manipulation")?;
+        let direct_manipulation = DirectManipulationHandler::new(hwnd, scale_factor)
+            .context("initializing Direct Manipulation")?;
 
         Ok(Self {
             origin: Cell::new(origin),
@@ -173,7 +170,6 @@ impl WindowsWindowState {
             min_size,
             callbacks,
             frame_signal: Arc::new(PlatformFrameSignal::new()),
-            fast_frame_request,
             input_handler: Cell::new(input_handler),
             ime_enabled: Cell::new(true),
             pending_surrogate: Cell::new(pending_surrogate),
@@ -972,20 +968,12 @@ impl PlatformWindow for WindowsWindow {
         self.state.is_fullscreen()
     }
 
-    fn frame_waker(&self) -> Option<Rc<dyn Fn()>> {
-        crate::fast::frame_schedule::frame_waker(self)
-    }
-
-    fn schedule_frame(&self) {
-        crate::fast::frame_schedule::schedule_frame(self)
-    }
-
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>) {
         self.state.callbacks.request_frame.set(Some(callback));
     }
 
     fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
-        crate::fast::frame_schedule::on_input(self, callback)
+        self.state.callbacks.input.set(Some(callback));
     }
 
     fn on_active_status_change(&self, callback: Box<dyn FnMut(bool)>) {
@@ -1051,24 +1039,6 @@ impl PlatformWindow for WindowsWindow {
             .borrow_mut()
             .draw(scene, self.state.background_appearance.get())
             .log_err();
-        crate::fast::frame_schedule::schedule_frame(self);
-    }
-
-    fn draw_composed(&self, scene: ComposedScene<'_>) {
-        crate::fast::composition::draw_composed(self, scene);
-        crate::fast::frame_schedule::schedule_frame(self);
-    }
-
-    fn enable_window_composition(&self) -> anyhow::Result<()> {
-        crate::fast::composition::enable_window_composition(self)
-    }
-
-    fn create_native_surface(&self) -> anyhow::Result<Rc<dyn PlatformSurfaceAttachment>> {
-        crate::fast::composition::create_native_surface(self)
-    }
-
-    fn set_composition_order(&self, surfaces: &[PlatformCompositionSurface]) -> anyhow::Result<()> {
-        crate::fast::composition::set_composition_order(self, surfaces)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1085,13 +1055,6 @@ impl PlatformWindow for WindowsWindow {
 
     fn get_raw_handle(&self) -> HWND {
         self.0.hwnd
-    }
-
-    fn register_gpu_painter(
-        &self,
-        fast_registration: gpui::GpuPainterRegistration,
-    ) -> anyhow::Result<()> {
-        crate::fast::gpu_painter::register(self, fast_registration)
     }
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
@@ -1458,7 +1421,7 @@ enum WindowOpenState {
     Windowed,
 }
 
-pub(crate) const WINDOW_CLASS_NAME: PCWSTR = crate::fast::class_names::WINDOW;
+const WINDOW_CLASS_NAME: PCWSTR = w!("Zed::Window");
 
 fn register_window_class(icon_handle: HICON) {
     static ONCE: Once = Once::new();

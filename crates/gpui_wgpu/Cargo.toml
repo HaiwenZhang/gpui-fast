@@ -19,7 +19,7 @@ font-kit = ["dep:font-kit"]
 test-support = ["gpui/test-support", "dep:image"]
 
 [dependencies]
-gpui = { workspace = true, features = ["gpu-wgpu"] }
+gpui.workspace = true
 anyhow.workspace = true
 bytemuck.workspace = true
 collections.workspace = true

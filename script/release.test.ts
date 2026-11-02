@@ -1,12 +1,30 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { adaptToReleasedWgpu, dependency } from "./prepare-release";
+import { adaptToReleasedWgpu, dependency, prepare } from "./prepare-release";
 import { validate } from "./publish-release";
-import { fastName, readConfig, readToml } from "./release-common";
+import { ROOT, fastName, readConfig, readToml } from "./release-common";
 
 const config = readConfig();
+
+test("release packages bundle assembled performance and native adapters without modifying upstream", () => {
+  const root = mkdtempSync(resolve(tmpdir(), "gpui-fast-assembled-release-"));
+  const upstream = resolve(ROOT, "crates/gpui/src/gpui.rs");
+  const original = readFileSync(upstream);
+  try {
+    prepare(config, "0.999.0", root);
+    expect(existsSync(resolve(root, "gpui/src/fast/retained.rs"))).toBe(true);
+    expect(existsSync(resolve(root, "gpui/src/extensions/gpu_painter.rs"))).toBe(true);
+    expect(existsSync(resolve(root, "gpui_apple/src/extensions/gpu_painter.rs"))).toBe(true);
+    expect(readFileSync(resolve(root, "gpui/src/scene.rs"), "utf8")).toContain("pub gpu_paints:");
+    expect(readFileSync(resolve(root, "gpui/src/gpui.rs"), "utf8")).toContain("pub use extensions::gpu_painter::GpuPainter;");
+    expect(readFileSync(resolve(root, "gpui/src/gpui.rs"), "utf8")).toStartWith("// Modified by Longbridge for gpui-fast.");
+    expect(readFileSync(upstream).equals(original)).toBe(true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("publication validates caret sibling requirements and rejects exact pins", () => {
   const root = mkdtempSync(resolve(tmpdir(), "gpui-fast-validate-"));

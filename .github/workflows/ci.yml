@@ -24,6 +24,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Assembly verifies bytes against the recorded vendor import.
+          fetch-depth: 0
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -40,33 +43,49 @@ jobs:
       - name: Install Rust
         run: rustup show
 
+      - name: Assemble source overlays
+        run: python3 script/assemble
+
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: target/integration/workspace -> ../..
 
       - name: Test gpui
-        run: cargo test -p gpui --features test-support
+        run: python3 script/cargo test -p gpui --features test-support
 
       - name: Link GPUI Fast with GPUI Pre
         if: runner.os == 'Windows'
-        run: cargo test -p gpui_perf --features fast,upstream --test windows_manifest_coexistence
+        run: python3 script/cargo test -p gpui_perf --features fast,upstream --test windows_manifest_coexistence
 
       # Scroll layer tiles must match drawing directly, byte for byte, on
       # each renderer; these run on the runner's GPU.
       - name: Test scroll layers on Metal
         if: runner.os == 'macOS'
-        run: cargo test -p gpui_apple fast::layers -- --nocapture
+        run: python3 script/cargo test -p gpui_apple fast::layers -- --nocapture
 
       - name: Test scroll layers on Direct3D
         if: runner.os == 'Windows'
-        run: cargo test -p gpui_windows --features test-support fast::layers -- --nocapture
+        run: python3 script/cargo test -p gpui_windows --features test-support fast::layers -- --nocapture
+
+      - name: Test CAD viewport on Metal
+        if: runner.os == 'macOS'
+        run: python3 script/cargo test -p gpui_cad --bin cad_viewport --features gpui_cad/runtime_shaders --locked
 
       - name: Check gpui_perf
-        run: cargo check -p gpui_perf --all-targets
+        run: python3 script/cargo check -p gpui_perf -p gpui_cad --all-targets
+
+      - name: Assemble without native GPU
+        run: python3 script/assemble --without-native-gpu --dest target/integration/performance
+
+      - name: Check base without native GPU
+        working-directory: target/integration/performance
+        run: cargo check -p gpui --lib
 
       # The gpui-pre stand-ins GPUI Kit applications patch in (compat/): every
       # feature a gpui-pre crate has must reach ours.
       - name: Check compat
         run: >-
-          cargo check -p gpui-pre -p gpui-pre-platform -p gpui-pre-macros
+          python3 script/cargo check -p gpui-pre -p gpui-pre-platform -p gpui-pre-macros
           -p gpui-pre-reqwest-client -p gpui-pre-sum-tree --all-features
 
   lint:
@@ -91,13 +110,21 @@ jobs:
       - name: Install Rust
         run: rustup show
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Assemble source overlays
+        run: python3 script/assemble
 
-      - name: Check that upstream files only hold hooks
-        run: script/check-upstream
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: target/integration/workspace -> ../..
+
+      - name: Test assembly and failure isolation
+        run: python3 -m unittest discover -s integration -p "test_*.py"
+
+      - name: Check pristine upstream and assembled hooks
+        run: python3 script/check-upstream
 
       - name: Rustfmt
-        run: cargo fmt -p gpui -p gpui_perf -- --check
+        run: python3 script/cargo fmt -p gpui -p gpui_perf -p gpui_cad -- --check
 
       - name: Clippy
-        run: cargo clippy -p gpui -p gpui_perf --all-targets --features gpui/test-support -- -D warnings
+        run: python3 script/cargo clippy -p gpui -p gpui_perf -p gpui_cad --all-targets --features gpui/test-support,gpui_cad/runtime_shaders -- -D warnings

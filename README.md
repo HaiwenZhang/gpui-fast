@@ -31,9 +31,9 @@ Opt-in composition supports macOS, Windows and Linux (Wayland and X11), based on
 
 ```sh
 # WKWebView on macOS, WebView2 on Windows, a GPU surface of its own on Linux
-cargo run -p gpui_perf --example native_webview
+python3 script/cargo run -p gpui_perf --example native_webview
 # A WebKitGTK page on Linux X11 or XWayland
-cargo run -p gpui_perf --example linux_webview
+python3 script/cargo run -p gpui_perf --example linux_webview
 ```
 
 ## Using it
@@ -54,7 +54,7 @@ Changes to render state outside tracked entities, globals and list/scroll state 
 
 v0.1.0 includes Zed's GPUI through [`a1b71072e5`](https://github.com/zed-industries/zed/commit/a1b71072e5b43faef437b471e988fbb5f972c99c). [UPSTREAM](UPSTREAM) records the revision for the current checkout.
 
-GPUI Fast keeps its implementation in `fast/` modules with small hooks into upstream code, making future syncs easier. See [Architecture](docs/architecture.md) and [Contributing](CONTRIBUTING.md) for design, building and testing.
+GPUI Fast keeps `crates/` pristine. Performance code lives in `fast/`, feature adapters and CAD in `extensions/`, and hooks in `integration/patches/`. Run local builds with `python3 script/cargo`; the workspace is assembled under `target/integration/workspace/`. See [Architecture](docs/architecture.md) and [Contributing](CONTRIBUTING.md) for design, building and testing.
 
 ## License
 

@@ -1,0 +1,1014 @@
+diff --git a/crates/gpui/Cargo.toml b/crates/gpui/Cargo.toml
+--- a/crates/gpui/Cargo.toml
++++ b/crates/gpui/Cargo.toml
+@@ -18,6 +18,9 @@
+ workspace = true
+ 
+ [features]
++gpu-metal = ["dep:metal"]
++gpu-wgpu = ["dep:wgpu"]
++gpu-d3d11 = ["windows/Win32_Graphics_Direct3D11", "windows/Win32_Graphics_Dxgi_Common"]
+ default = ["font-kit", "wayland", "x11", "windows-manifest"]
+ test-support = [
+     "collections/test-support",
+@@ -126,6 +129,7 @@
+ uuid = { workspace = true, features = ["v4"] }
+ web-time = { workspace = true, optional = true }
+ heapless.workspace = true
++wgpu = { workspace = true, optional = true }
+ 
+ [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+ async-channel.workspace = true
+@@ -151,6 +155,7 @@
+ [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+ objc2-core-foundation.workspace = true
+ objc2-core-video = { workspace = true, features = ["CVPixelBuffer"] }
++metal = { workspace = true, optional = true }
+ 
+ [target.'cfg(target_os = "macos")'.dependencies]
+ log.workspace = true
+diff --git a/crates/gpui/src/extensions/composition.rs b/crates/gpui/src/extensions/composition.rs
+--- a/crates/gpui/src/extensions/composition.rs
++++ b/crates/gpui/src/extensions/composition.rs
+@@ -481,6 +481,7 @@
+             && self.subpixel_sprites.is_empty()
+             && self.polychrome_sprites.is_empty()
+             && self.surfaces.is_empty()
++            && self.gpu_paints.is_empty()
+     }
+ 
+     /// Replays a range as a self-contained scene, restoring any layers that
+diff --git a/crates/gpui/src/extensions/mod.rs b/crates/gpui/src/extensions/mod.rs
+--- a/crates/gpui/src/extensions/mod.rs
++++ b/crates/gpui/src/extensions/mod.rs
+@@ -1 +1,4 @@
+ pub(crate) mod composition;
++pub(crate) mod gpu_context;
++pub(crate) mod gpu_painter;
++pub(crate) mod gpu_scene;
+diff --git a/crates/gpui/src/fast/layers/background.rs b/crates/gpui/src/fast/layers/background.rs
+--- a/crates/gpui/src/fast/layers/background.rs
++++ b/crates/gpui/src/fast/layers/background.rs
+@@ -130,5 +130,6 @@
+         Primitive::SubpixelSprite(sprite) => sprite.order,
+         Primitive::PolychromeSprite(sprite) => sprite.order,
+         Primitive::Surface(surface) => surface.order,
++        Primitive::FastGpuPaint(surface) => surface.order,
+     }
+ }
+diff --git a/crates/gpui/src/fast/layers/overlay.rs b/crates/gpui/src/fast/layers/overlay.rs
+--- a/crates/gpui/src/fast/layers/overlay.rs
++++ b/crates/gpui/src/fast/layers/overlay.rs
+@@ -57,6 +57,7 @@
+         Primitive::SubpixelSprite(_) => 5,
+         Primitive::PolychromeSprite(_) => 6,
+         Primitive::Surface(_) => 7,
++        Primitive::FastGpuPaint(_) => 8,
+     }
+ }
+ 
+diff --git a/crates/gpui/src/fast/layers/paint.rs b/crates/gpui/src/fast/layers/paint.rs
+--- a/crates/gpui/src/fast/layers/paint.rs
++++ b/crates/gpui/src/fast/layers/paint.rs
+@@ -696,6 +696,7 @@
+         Primitive::SubpixelSprite(p) => clip(&mut p.content_mask),
+         Primitive::PolychromeSprite(p) => clip(&mut p.content_mask),
+         Primitive::Surface(p) => clip(&mut p.content_mask),
++        Primitive::FastGpuPaint(p) => clip(&mut p.content_mask),
+     }
+ }
+ 
+@@ -751,10 +752,12 @@
+         size: region.size,
+     };
+     let (content, overlay) = crate::fast::layers::overlay::lift(content);
+-    let has_paths = content
+-        .paint_operations
+-        .iter()
+-        .any(|operation| matches!(operation, PaintOperation::Primitive(Primitive::Path(_))));
++    let has_paths = content.paint_operations.iter().any(|operation| {
++        matches!(
++            operation,
++            PaintOperation::Primitive(Primitive::Path(_) | Primitive::FastGpuPaint(_))
++        )
++    });
+     let mut visible = painting.viewport.scale(scale_factor);
+     visible.origin += to_content;
+     let mut rendered_work = 0;
+diff --git a/crates/gpui/src/fast/layers/record.rs b/crates/gpui/src/fast/layers/record.rs
+--- a/crates/gpui/src/fast/layers/record.rs
++++ b/crates/gpui/src/fast/layers/record.rs
+@@ -55,7 +55,8 @@
+     pub(crate) views: Rc<[EntityId]>,
+     /// Whether the content's overlay cannot be drawn over its tiles: a
+     /// list row drew over the overlay of a row before it. Such content is
+-    /// drawn into the frame instead.
++    /// drawn into the frame instead. Native GPU paints also require this path
++    /// so their preparation and drawing callbacks run on each frame.
+     pub(crate) has_paths: bool,
+     /// The paths the content painted, and what it drew over them, in
+     /// content space, in drawing order: left out of `content`, and drawn
+diff --git a/crates/gpui/src/fast/layers/scene.rs b/crates/gpui/src/fast/layers/scene.rs
+--- a/crates/gpui/src/fast/layers/scene.rs
++++ b/crates/gpui/src/fast/layers/scene.rs
+@@ -354,6 +354,10 @@
+             mv(&mut sprite.bounds);
+             mv(&mut sprite.content_mask.bounds);
+         }
++        Primitive::FastGpuPaint(surface) => {
++            mv(&mut surface.bounds);
++            mv(&mut surface.content_mask.bounds);
++        }
+         Primitive::Surface(surface) => {
+             mv(&mut surface.bounds);
+             mv(&mut surface.content_mask.bounds);
+diff --git a/crates/gpui/src/fast/layers/tiles.rs b/crates/gpui/src/fast/layers/tiles.rs
+--- a/crates/gpui/src/fast/layers/tiles.rs
++++ b/crates/gpui/src/fast/layers/tiles.rs
+@@ -290,6 +290,14 @@
+             hash_corners(&sprite.corner_radii, hasher);
+             hash_tile(&sprite.tile, hasher);
+         }
++        Primitive::FastGpuPaint(surface) => {
++            hasher.write_u8(8);
++            hash_bounds(&surface.bounds, hasher);
++            hash_mask(&surface.content_mask, tile, hasher);
++            hasher.write_usize(std::sync::Arc::as_ptr(&surface.draw.data) as *const () as usize);
++            hasher.write_u32(surface.draw.scale_factor.to_bits());
++            hasher.write_u32(surface.draw.opacity.to_bits());
++        }
+         Primitive::Surface(surface) => {
+             // A surface's pixels come from outside the scene; layers never
+             // hold one (spec §6.5), so it only needs to hash apart.
+diff --git a/crates/gpui/src/fast/layers/verify.rs b/crates/gpui/src/fast/layers/verify.rs
+--- a/crates/gpui/src/fast/layers/verify.rs
++++ b/crates/gpui/src/fast/layers/verify.rs
+@@ -65,6 +65,7 @@
+         Primitive::SubpixelSprite(p) => &mut p.content_mask,
+         Primitive::PolychromeSprite(p) => &mut p.content_mask,
+         Primitive::Surface(p) => &mut p.content_mask,
++        Primitive::FastGpuPaint(p) => &mut p.content_mask,
+     };
+     content_mask.bounds = content_mask.bounds.intersect(mask);
+ }
+@@ -225,6 +226,9 @@
+             }
+         ),
+         Primitive::Surface(p) => format!("surface {:?} {:?}", p.bounds, p.content_mask),
++        Primitive::FastGpuPaint(p) => {
++            format!("gpu {:?} {:?} {:?}", p.bounds, p.content_mask, p.draw)
++        }
+     }
+ }
+ 
+diff --git a/crates/gpui/src/fast/scene.rs b/crates/gpui/src/fast/scene.rs
+--- a/crates/gpui/src/fast/scene.rs
++++ b/crates/gpui/src/fast/scene.rs
+@@ -230,6 +230,7 @@
+ #[inline]
+ pub(crate) fn sort_in_drawing_order(scene: &mut Scene) {
+     crate::fast::rounded_clip_scene::compile(scene);
++    scene.gpu_paints.sort_by_key(|surface| surface.order);
+     let scratch = &mut scene.sort_scratch;
+     macro_rules! sort {
+         ($field:ident, $order:expr) => {
+diff --git a/crates/gpui/src/gpui.rs b/crates/gpui/src/gpui.rs
+--- a/crates/gpui/src/gpui.rs
++++ b/crates/gpui/src/gpui.rs
+@@ -120,6 +120,42 @@
+     PlatformCompositionSurface, PlatformCompositionSurfaceContent, PlatformSurfaceAttachment,
+     WindowComposition, WindowCompositionSurface,
+ };
++#[cfg(all(feature = "gpu-d3d11", target_os = "windows"))]
++pub use extensions::gpu_context::D3D11PaintContext;
++#[cfg(all(feature = "gpu-d3d11", target_os = "windows"))]
++pub use extensions::gpu_context::D3D11PrepareContext;
++pub use extensions::gpu_context::GpuPaintContext;
++pub use extensions::gpu_context::GpuPassContext;
++pub use extensions::gpu_context::GpuPrepareContext;
++#[cfg(all(feature = "gpu-metal", any(target_os = "macos", target_os = "ios")))]
++pub use extensions::gpu_context::MetalDrawContext;
++#[cfg(all(feature = "gpu-metal", any(target_os = "macos", target_os = "ios")))]
++pub use extensions::gpu_context::MetalPaintContext;
++#[cfg(all(feature = "gpu-metal", any(target_os = "macos", target_os = "ios")))]
++pub use extensions::gpu_context::MetalPrepareContext;
++#[cfg(feature = "gpu-wgpu")]
++pub use extensions::gpu_context::WgpuDrawContext;
++#[cfg(feature = "gpu-wgpu")]
++pub use extensions::gpu_context::WgpuPaintContext;
++#[cfg(feature = "gpu-wgpu")]
++pub use extensions::gpu_context::WgpuPrepareContext;
++pub use extensions::gpu_painter::AnyGpuPainterHandle;
++pub use extensions::gpu_painter::ErasedGpuPainter;
++pub use extensions::gpu_painter::GpuBackend;
++pub use extensions::gpu_painter::GpuCapabilities;
++pub use extensions::gpu_painter::GpuDrawMode;
++pub use extensions::gpu_painter::GpuPaintPreparation;
++pub use extensions::gpu_painter::GpuPaintPrimitive;
++pub use extensions::gpu_painter::GpuPaintTarget;
++pub use extensions::gpu_painter::GpuPainter;
++pub use extensions::gpu_painter::GpuPainterHandle;
++pub use extensions::gpu_painter::GpuPainterRegistration;
++pub use extensions::gpu_painter::GpuPainterRegistry;
++pub use extensions::gpu_painter::GpuPainterStatus;
++pub use extensions::gpu_painter::GpuPreparationPhase;
++pub use extensions::gpu_painter::GpuResetReason;
++pub use extensions::gpu_painter::prepare_gpu_paints;
++pub use extensions::gpu_painter::{GpuScenePreparation, prepare_gpu_scene};
+ pub use fast::layers::scene::{
+     LAYER_TILE_TEXTURE_BASE, LayerContent, LayerFrame, LayerKey, SceneLayers, TileCoord,
+     decode_layer_tile, layer_tile_id, layer_tile_texture_id,
+@@ -199,6 +235,8 @@
+         $crate::bench_main!(allocator = ::std::alloc::System; $($groups)*);
+     };
+ }
++pub use extensions::gpu_scene::GpuPaintSurface;
++pub use extensions::gpu_scene::SceneBatch;
+ pub use gpui_shared_string::*;
+ pub use gpui_util::arc_cow::ArcCow;
+ pub use http_client;
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -1367,6 +1367,9 @@
+     }
+     fn set_client_inset(&self, _inset: Pixels) {}
+     fn gpu_specs(&self) -> Option<GpuSpecs>;
++    fn register_gpu_painter(&self, fast_registration: crate::GpuPainterRegistration) -> Result<()> {
++        crate::extensions::gpu_painter::unavailable(fast_registration)
++    }
+ 
+     fn update_ime_position(&self, _bounds: Bounds<Pixels>);
+ 
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -50,6 +50,7 @@
+     pub subpixel_sprites: Vec<SubpixelSprite>,
+     pub polychrome_sprites: Vec<PolychromeSprite>,
+     pub surfaces: Vec<PaintSurface>,
++    pub gpu_paints: crate::extensions::gpu_scene::GpuPaints,
+     pub(crate) sort_scratch: crate::fast::scene::SortScratch,
+     pub(crate) fast_rounded_clip: crate::fast::rounded_clip::SceneClips,
+     pub layers: crate::fast::layers::scene::SceneLayers,
+@@ -70,6 +71,7 @@
+         self.subpixel_sprites.clear();
+         self.polychrome_sprites.clear();
+         self.surfaces.clear();
++        crate::extensions::gpu_scene::clear(self);
+         crate::fast::layers::scene::SceneLayers::clear(&mut self.layers);
+     }
+ 
+@@ -133,6 +135,9 @@
+             Primitive::PolychromeSprite(sprite) => {
+                 sprite.order = order;
+                 self.polychrome_sprites.push(*sprite);
++            }
++            Primitive::FastGpuPaint(surface) => {
++                crate::extensions::gpu_scene::insert(self, surface, order)
+             }
+             Primitive::Surface(surface) => {
+                 surface.order = order;
+@@ -228,6 +233,7 @@
+     SubpixelSprite(SubpixelSprite),
+     PolychromeSprite(PolychromeSprite),
+     Surface(PaintSurface),
++    FastGpuPaint(crate::extensions::gpu_scene::GpuPaintSurface),
+ }
+ 
+ #[expect(missing_docs)]
+@@ -242,6 +248,7 @@
+             Primitive::SubpixelSprite(sprite) => &sprite.bounds,
+             Primitive::PolychromeSprite(sprite) => &sprite.bounds,
+             Primitive::Surface(surface) => &surface.bounds,
++            Primitive::FastGpuPaint(fast_surface) => &fast_surface.bounds,
+         }
+     }
+ 
+@@ -255,6 +262,7 @@
+             Primitive::SubpixelSprite(sprite) => &sprite.content_mask,
+             Primitive::PolychromeSprite(sprite) => &sprite.content_mask,
+             Primitive::Surface(surface) => &surface.content_mask,
++            Primitive::FastGpuPaint(fast_surface) => &fast_surface.content_mask,
+         }
+     }
+ }
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3329,7 +3329,7 @@
+     }
+ 
+     #[inline]
+-    fn snap_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<ScaledPixels> {
++    pub(crate) fn snap_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<ScaledPixels> {
+         let scale_factor = self.scale_factor();
+         let left = round_to_device_pixel(bounds.left().0, scale_factor);
+         let top = round_to_device_pixel(bounds.top().0, scale_factor);
+diff --git a/crates/gpui_apple/Cargo.toml b/crates/gpui_apple/Cargo.toml
+--- a/crates/gpui_apple/Cargo.toml
++++ b/crates/gpui_apple/Cargo.toml
+@@ -20,7 +20,7 @@
+ font-kit = ["dep:font-kit", "dep:core-text", "dep:objc2-core-text", "dep:pathfinder_geometry"]
+ 
+ [dependencies]
+-gpui.workspace = true
++gpui = { workspace = true, features = ["gpu-metal"] }
+ 
+ [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+ anyhow.workspace = true
+diff --git a/crates/gpui_apple/src/extensions/mod.rs b/crates/gpui_apple/src/extensions/mod.rs
+--- a/crates/gpui_apple/src/extensions/mod.rs
++++ b/crates/gpui_apple/src/extensions/mod.rs
+@@ -1 +1,2 @@
+ pub(crate) mod composition;
++pub(crate) mod gpu_painter;
+diff --git a/crates/gpui_apple/src/fast/paths.rs b/crates/gpui_apple/src/fast/paths.rs
+--- a/crates/gpui_apple/src/fast/paths.rs
++++ b/crates/gpui_apple/src/fast/paths.rs
+@@ -61,7 +61,7 @@
+     texture: &metal::TextureRef,
+     viewport_size: Size<DevicePixels>,
+ ) -> Result<Option<metal::CommandBuffer>> {
+-    if crate::fast::rounded_clip::has_groups(scene) {
++    if !scene.gpu_paints.is_empty() || crate::fast::rounded_clip::has_groups(scene) {
+         return crate::fast::rounded_clip::draw(
+             renderer,
+             scene,
+diff --git a/crates/gpui_apple/src/fast/rounded_clip.rs b/crates/gpui_apple/src/fast/rounded_clip.rs
+--- a/crates/gpui_apple/src/fast/rounded_clip.rs
++++ b/crates/gpui_apple/src/fast/rounded_clip.rs
+@@ -5,6 +5,7 @@
+ 
+ use anyhow::{Context as _, Result};
+ use gpui::{AtlasTextureId, DevicePixels, LayerFrame, PrimitiveBatch, Scene, Size};
++use gpui_util::ResultExt;
+ 
+ use crate::metal_renderer::{
+     InstanceBindings, InstanceBufferWriter, MetalRenderer, new_command_encoder_for_texture,
+@@ -85,8 +86,10 @@
+     texture: &metal::TextureRef,
+     viewport: Size<DevicePixels>,
+ ) -> Result<metal::CommandBuffer> {
++    let device = renderer.device.clone();
+     let queue = renderer.command_queue.clone();
+     let command_buffer = queue.new_command_buffer();
++    let preparation = crate::extensions::gpu_painter::prepare(renderer, scene, texture, command_buffer);
+     let alpha = if renderer.opaque { 1. } else { 0. };
+     let encoder = new_command_encoder_for_texture(
+         command_buffer,
+@@ -96,6 +99,7 @@
+     );
+     encode(
+         renderer,
++        &device,
+         scene,
+         bindings,
+         writer,
+@@ -103,6 +107,7 @@
+         viewport,
+         command_buffer,
+         &mut Vec::new(),
++        &preparation,
+         encoder,
+     )?
+     .end_encoding();
+@@ -118,15 +123,18 @@
+     commands: &metal::CommandBufferRef,
+     background: metal::MTLClearColor,
+ ) -> Result<()> {
++    let device = renderer.device.clone();
+     let old_texture = renderer.path_intermediate_texture.take();
+     let old_msaa = renderer.path_intermediate_msaa_texture.take();
+     renderer.update_path_intermediate_textures(viewport);
+     let result = (|| {
++        let preparation = crate::extensions::gpu_painter::prepare(renderer, scene, texture, commands);
+         let bindings = write_instances(scene, writer)?;
+         let encoder =
+             new_command_encoder_for_texture(commands, texture, viewport, Some(background));
+         encode(
+             renderer,
++            &device,
+             scene,
+             &bindings,
+             writer,
+@@ -134,6 +142,7 @@
+             viewport,
+             commands,
+             &mut Vec::new(),
++            &preparation,
+             encoder,
+         )?
+         .end_encoding();
+@@ -147,6 +156,7 @@
+ #[allow(clippy::too_many_arguments)]
+ fn encode<'a>(
+     renderer: &mut MetalRenderer,
++    device: &'a metal::DeviceRef,
+     scene: &Scene,
+     bindings: &InstanceBindings,
+     writer: &mut InstanceBufferWriter,
+@@ -154,10 +164,52 @@
+     viewport: Size<DevicePixels>,
+     commands: &'a metal::CommandBufferRef,
+     clips: &mut Vec<Clip>,
++    preparation: &gpui::GpuScenePreparation,
+     mut encoder: &'a metal::RenderCommandEncoderRef,
+ ) -> Result<&'a metal::RenderCommandEncoderRef> {
+     renderer.fast_layers.note_composited(scene);
+-    for batch in scene.batches() {
++    for batch in scene.render_batches() {
++        let batch = match batch {
++            gpui::SceneBatch::Primitive(batch) => batch,
++            gpui::SceneBatch::GpuPaints(range) => {
++                for surface in &scene.gpu_paints[range] {
++                    let Some(mode) = preparation.draw_mode(surface) else {
++                        continue;
++                    };
++                    let target = surface.draw.target(
++                        [texture.width() as u32, texture.height() as u32],
++                        surface.bounds,
++                        surface.content_mask,
++                        texture.sample_count() as u32,
++                    );
++                    let [_, _, width, height] = target.scissor_rect();
++                    if width == 0 || height == 0 {
++                        continue;
++                    }
++                    surface
++                        .draw
++                        .handle
++                        .invoke(|painter| {
++                            renderer.draw_gpu_surface(
++                                painter,
++                                mode,
++                                gpui::MetalPaintContext {
++                                    target,
++                                    device,
++                                    command_buffer: commands,
++                                    color_target: texture,
++                                    color_format: texture.pixel_format(),
++                                },
++                                surface.draw.data.as_ref(),
++                                &mut encoder,
++                                viewport,
++                            )
++                        })
++                        .log_err();
++                }
++                continue;
++            }
++        };
+         bind(encoder, clips, &renderer.device);
+         match batch {
+             PrimitiveBatch::Shadows(range) => {
+@@ -197,6 +249,7 @@
+                         let child_bindings = write_instances(child, writer)?;
+                         encoder = encode(
+                             renderer,
++                            device,
+                             child,
+                             &child_bindings,
+                             writer,
+@@ -204,6 +257,7 @@
+                             viewport,
+                             commands,
+                             clips,
++                            preparation,
+                             encoder,
+                         )?;
+                         clips.pop();
+diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
+--- a/crates/gpui_apple/src/metal_renderer.rs
++++ b/crates/gpui_apple/src/metal_renderer.rs
+@@ -114,6 +114,7 @@
+ }
+ 
+ pub struct MetalRenderer {
++    pub(crate) fast_gpu: crate::extensions::gpu_painter::GpuState,
+     pub(crate) device: metal::Device,
+     pub(crate) layer: Option<metal::MetalLayer>,
+     is_apple_gpu: bool,
+@@ -417,6 +418,7 @@
+         };
+ 
+         Self {
++            fast_gpu: crate::extensions::gpu_painter::GpuState::new(&device),
+             device,
+             layer,
+             presents_with_transaction: false,
+@@ -521,7 +523,7 @@
+     }
+ 
+     pub fn destroy(&self) {
+-        // nothing to do
++        crate::extensions::gpu_painter::destroy(self);
+     }
+ 
+     pub fn draw(&mut self, scene: &Scene) {
+@@ -1366,7 +1368,7 @@
+ }
+ 
+ #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
+-fn read_texture_to_image(texture: &metal::TextureRef) -> Result<RgbaImage> {
++pub(crate) fn read_texture_to_image(texture: &metal::TextureRef) -> Result<RgbaImage> {
+     let width = texture.width() as u32;
+     let height = texture.height() as u32;
+     let bytes_per_row = width as usize * 4;
+diff --git a/crates/gpui_linux/src/extensions/mod.rs b/crates/gpui_linux/src/extensions/mod.rs
+--- a/crates/gpui_linux/src/extensions/mod.rs
++++ b/crates/gpui_linux/src/extensions/mod.rs
+@@ -1,2 +1,3 @@
+ #[cfg(any(feature = "wayland", feature = "x11"))]
+ pub(crate) mod composition;
++pub(crate) mod gpu_painter;
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -2251,6 +2251,13 @@
+         state.client.update_ime_position(bounds);
+     }
+ 
++    fn register_gpu_painter(
++        &self,
++        fast_registration: gpui::GpuPainterRegistration,
++    ) -> anyhow::Result<()> {
++        crate::extensions::gpu_painter::wayland(self, fast_registration)
++    }
++
+     fn gpu_specs(&self) -> Option<GpuSpecs> {
+         self.borrow().renderer.as_ref()?.gpu_specs()
+     }
+diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
+--- a/crates/gpui_linux/src/linux/x11/window.rs
++++ b/crates/gpui_linux/src/linux/x11/window.rs
+@@ -2003,6 +2003,13 @@
+         client.update_ime_position(bounds);
+     }
+ 
++    fn register_gpu_painter(
++        &self,
++        fast_registration: gpui::GpuPainterRegistration,
++    ) -> anyhow::Result<()> {
++        crate::extensions::gpu_painter::x11(self, fast_registration)
++    }
++
+     fn gpu_specs(&self) -> Option<GpuSpecs> {
+         self.0.state.borrow().renderer.as_ref()?.gpu_specs()
+     }
+diff --git a/crates/gpui_macos/src/extensions/mod.rs b/crates/gpui_macos/src/extensions/mod.rs
+--- a/crates/gpui_macos/src/extensions/mod.rs
++++ b/crates/gpui_macos/src/extensions/mod.rs
+@@ -1 +1,2 @@
+ pub(crate) mod composition;
++pub(crate) mod gpu_painter;
+diff --git a/crates/gpui_macos/src/window.rs b/crates/gpui_macos/src/window.rs
+--- a/crates/gpui_macos/src/window.rs
++++ b/crates/gpui_macos/src/window.rs
+@@ -958,7 +958,7 @@
+ 
+ unsafe impl Send for MacWindowState {}
+ 
+-pub(crate) struct MacWindow(Arc<Mutex<MacWindowState>>, MainThreadMarker);
++pub(crate) struct MacWindow(pub(crate) Arc<Mutex<MacWindowState>>, MainThreadMarker);
+ 
+ impl MacWindow {
+     pub fn open(
+@@ -2157,6 +2157,13 @@
+         self.0.lock().renderer.sprite_atlas().clone()
+     }
+ 
++    fn register_gpu_painter(
++        &self,
++        fast_registration: gpui::GpuPainterRegistration,
++    ) -> anyhow::Result<()> {
++        crate::extensions::gpu_painter::register(self, fast_registration)
++    }
++
+     fn gpu_specs(&self) -> Option<gpui::GpuSpecs> {
+         None
+     }
+diff --git a/crates/gpui_wgpu/Cargo.toml b/crates/gpui_wgpu/Cargo.toml
+--- a/crates/gpui_wgpu/Cargo.toml
++++ b/crates/gpui_wgpu/Cargo.toml
+@@ -19,7 +19,7 @@
+ test-support = ["gpui/test-support", "dep:image"]
+ 
+ [dependencies]
+-gpui.workspace = true
++gpui = { workspace = true, features = ["gpu-wgpu"] }
+ anyhow.workspace = true
+ bytemuck.workspace = true
+ collections.workspace = true
+diff --git a/crates/gpui_wgpu/src/extensions/mod.rs b/crates/gpui_wgpu/src/extensions/mod.rs
+--- a/crates/gpui_wgpu/src/extensions/mod.rs
++++ b/crates/gpui_wgpu/src/extensions/mod.rs
+@@ -1,2 +1,3 @@
+ #[cfg(not(target_family = "wasm"))]
+ pub(crate) mod composition;
++pub(crate) mod gpu_painter;
+diff --git a/crates/gpui_wgpu/src/fast/frame.rs b/crates/gpui_wgpu/src/fast/frame.rs
+--- a/crates/gpui_wgpu/src/fast/frame.rs
++++ b/crates/gpui_wgpu/src/fast/frame.rs
+@@ -36,6 +36,7 @@
+ 
+ use anyhow::{Context as _, Result};
+ use gpui::{AtlasTextureId, Bounds, PrimitiveBatch, ScaledPixels, Scene};
++use gpui_util::ResultExt;
+ 
+ use crate::WgpuAtlas;
+ use crate::fast::bind_groups::BindGroupCache;
+@@ -359,8 +360,9 @@
+         return;
+     }
+     let mut group_start = path_batches.len();
+-    for batch in scene.batches() {
+-        let PrimitiveBatch::Paths(range) = batch else {
++    // Native paints split path batches even when no built-in kind separates them.
++    for batch in scene.render_batches() {
++        let gpui::SceneBatch::Primitive(PrimitiveBatch::Paths(range)) = batch else {
+             continue;
+         };
+         let paths = &scene.paths[range];
+@@ -669,6 +671,7 @@
+     scene: &'a Scene,
+     upload: &'a SceneUpload,
+     batch: PrimitiveBatch,
++    gpu: Option<Range<usize>>,
+     clip: Option<usize>,
+     path: Option<&'a PathBatch>,
+     path_group: Option<Range<u32>>,
+@@ -693,7 +696,22 @@
+ ) {
+     let mut path_index = 0;
+     let mut path_group = None;
+-    for batch in scene.batches() {
++    for batch in scene.render_batches() {
++        let batch = match batch {
++            gpui::SceneBatch::Primitive(batch) => batch,
++            gpui::SceneBatch::GpuPaints(range) => {
++                steps.push(DrawStep {
++                    scene,
++                    upload,
++                    batch: PrimitiveBatch::Surfaces(0..0),
++                    gpu: Some(range),
++                    clip: binding,
++                    path: None,
++                    path_group: None,
++                });
++                continue;
++            }
++        };
+         if let PrimitiveBatch::PolychromeSprites {
+             texture_id,
+             ref range,
+@@ -746,6 +764,7 @@
+             scene,
+             upload,
+             batch,
++            gpu: None,
+             clip: binding,
+             path,
+             path_group: path_group.clone(),
+@@ -810,9 +829,97 @@
+         )
+         .then_some(step.path_key())
+     });
++    let texture = draw.view.texture();
++    let size = [texture.width(), texture.height()];
++    let preparation = gpui::prepare_gpu_scene(
++        draw.scene,
++        size,
++        texture.sample_count(),
++        gpui::GpuBackend::Wgpu.capabilities(),
++        |painter, primitive, target_info, phase| {
++            let mut context = gpui::GpuPrepareContext::Wgpu(gpui::WgpuPrepareContext {
++                target: target_info,
++                device: target.device,
++                queue: target.queue,
++                encoder,
++                color_format: target.format,
++            });
++            match phase {
++                gpui::GpuPreparationPhase::Prepare => {
++                    painter.prepare_erased(&mut context, primitive.data.as_ref())
++                }
++                gpui::GpuPreparationPhase::FinishPrepare => {
++                    painter.finish_prepare_erased(&mut context, primitive.data.as_ref())
++                }
++            }
++        },
++    );
+     let mut pass = begin_main_pass(encoder, draw.view, draw.label, draw.clear);
+     let mut bound = PassState::default();
+     for step in steps {
++        if let Some(range) = step.gpu {
++            for surface in &step.scene.gpu_paints[range] {
++                let Some(mode) = preparation.draw_mode(surface) else {
++                    continue;
++                };
++                let paint_target = surface.draw.target(
++                    size,
++                    surface.bounds,
++                    surface.content_mask,
++                    texture.sample_count(),
++                );
++                let [_, _, width, height] = paint_target.scissor_rect();
++                if width == 0 || height == 0 {
++                    continue;
++                }
++                match mode {
++                    gpui::GpuDrawMode::SharedPass => {
++                        surface
++                            .draw
++                            .handle
++                            .invoke(|painter| {
++                                crate::extensions::gpu_painter::draw_in_pass(
++                                    target.device,
++                                    target.format,
++                                    painter,
++                                    paint_target,
++                                    surface.draw.data.as_ref(),
++                                    &mut pass,
++                                )
++                            })
++                            .log_err();
++                    }
++                    gpui::GpuDrawMode::OwnPass => {
++                        drop(pass);
++                        surface
++                            .draw
++                            .handle
++                            .invoke(|painter| {
++                                painter.paint_erased(
++                                    &mut gpui::GpuPaintContext::Wgpu(gpui::WgpuPaintContext {
++                                        target: paint_target,
++                                        device: target.device,
++                                        encoder,
++                                        color_target: draw.view,
++                                        color_format: target.format,
++                                    }),
++                                    surface.draw.data.as_ref(),
++                                )
++                            })
++                            .log_err();
++                        pass = begin_main_pass(
++                            encoder,
++                            draw.view,
++                            "main_pass_after_gpu_painter",
++                            None,
++                        );
++                    }
++                }
++                // Painter pipelines and bindings invalidate every cached UI state entry.
++                bound.forget();
++            }
++            continue;
++        }
+         let path_key = step.path_key();
+         let upload = step.upload;
+         let scene = step.scene;
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -137,7 +137,7 @@
+ }
+ 
+ /// One frame allocation of instance data, ready to bind.
+-struct InstanceBinding {
++pub(crate) struct InstanceBinding {
+     bind_group: wgpu::BindGroup,
+     /// Index of the allocation's first instance within the bound data. Always
+     /// zero on the storage-buffer path, where the binding offset already
+@@ -147,8 +147,8 @@
+     first_instance: u32,
+ }
+ 
+-struct InstanceBindings {
+-    quads: InstanceBinding,
++pub(crate) struct InstanceBindings {
++    pub(crate) quads: InstanceBinding,
+     shadows: InstanceBinding,
+     underlines: InstanceBinding,
+     monochrome_sprites: InstanceBinding,
+@@ -246,6 +246,7 @@
+ }
+ 
+ pub struct WgpuRenderer {
++    pub(crate) fast_gpu: crate::extensions::gpu_painter::GpuState,
+     /// Shared GPU context for device recovery coordination (unused on WASM).
+     #[allow(dead_code)]
+     pub(crate) context: Option<GpuContext>,
+@@ -473,6 +474,7 @@
+         let core = WgpuRendererCore::new(context, atlas.clone(), surface_format, alpha_mode);
+ 
+         Ok(Self {
++            fast_gpu: crate::extensions::gpu_painter::GpuState::default(),
+             context: gpu_context,
+             compositor_gpu,
+             state: RendererState::Ready { surface, core },
+@@ -1616,7 +1618,7 @@
+         Ok(submission)
+     }
+ 
+-    fn write_instances(
++    pub(crate) fn write_instances(
+         &mut self,
+         scene: &Scene,
+         instance_offset: &mut u64,
+@@ -1725,7 +1727,7 @@
+         }
+     }
+ 
+-    fn draw_instances(
++    pub(crate) fn draw_instances(
+         &self,
+         instances: &InstanceBinding,
+         pipeline: &wgpu::RenderPipeline,
+@@ -2181,6 +2183,7 @@
+     }
+ 
+     pub fn destroy(&mut self) {
++        crate::extensions::gpu_painter::destroy(self);
+         // Release surface-bound GPU resources eagerly so the underlying native
+         // window can be destroyed before the renderer itself is dropped.
+         self.state = RendererState::Released;
+@@ -2209,6 +2212,7 @@
+     where
+         W: HasWindowHandle + HasDisplayHandle + std::fmt::Debug + Send + Sync + Clone + 'static,
+     {
++        crate::extensions::gpu_painter::device_replaced(self);
+         let gpu_context = self.context.as_ref().expect("recover requires gpu_context");
+ 
+         // Check if another window already recovered the context
+@@ -2262,13 +2266,12 @@
+         self.atlas.handle_device_lost(context);
+ 
+         let is_bgr = self.is_bgr;
+-        *self = Self::new_internal(
+-            Some(gpu_context.clone()),
++        crate::extensions::gpu_painter::recover_renderer(
++            self,
++            gpu_context.clone(),
+             context,
+             surface,
+             config,
+-            self.compositor_gpu,
+-            self.atlas.clone(),
+         )?;
+         self.set_subpixel_layout(is_bgr);
+ 
+@@ -2281,9 +2284,9 @@
+     not(target_family = "wasm"),
+     any(test, feature = "bench-support", feature = "test-support")
+ ))]
+-struct HeadlessRenderTarget {
++pub(crate) struct HeadlessRenderTarget {
+     texture: wgpu::Texture,
+-    view: wgpu::TextureView,
++    pub(crate) view: wgpu::TextureView,
+ }
+ 
+ #[cfg(all(
+@@ -2306,7 +2309,7 @@
+ pub struct WgpuHeadlessRenderer {
+     context: WgpuContext,
+     pub(crate) core: WgpuRendererCore,
+-    render_target: Option<HeadlessRenderTarget>,
++    pub(crate) render_target: Option<HeadlessRenderTarget>,
+     observed_error_generation: u64,
+ }
+ 
+@@ -2393,7 +2396,7 @@
+         Ok(())
+     }
+ 
+-    fn render(&mut self, scene: &Scene, size: Size<DevicePixels>) -> anyhow::Result<()> {
++    pub(crate) fn render(&mut self, scene: &Scene, size: Size<DevicePixels>) -> anyhow::Result<()> {
+         self.check_gpu_errors()?;
+         self.ensure_render_target(size)?;
+         let view = self
+@@ -2409,7 +2412,7 @@
+ 
+     /// Copies the current render target back to the CPU. Dimensions come from the
+     /// target texture itself, so the copy can never disagree with what was rendered.
+-    fn read_image(&mut self) -> anyhow::Result<image::RgbaImage> {
++    pub(crate) fn read_image(&mut self) -> anyhow::Result<image::RgbaImage> {
+         let target = self
+             .render_target
+             .as_ref()
+diff --git a/crates/gpui_windows/Cargo.toml b/crates/gpui_windows/Cargo.toml
+--- a/crates/gpui_windows/Cargo.toml
++++ b/crates/gpui_windows/Cargo.toml
+@@ -18,7 +18,7 @@
+ screen-capture = ["gpui/screen-capture", "scap"]
+ 
+ [dependencies]
+-gpui.workspace = true
++gpui = { workspace = true, features = ["gpu-d3d11"] }
+ 
+ [target.'cfg(target_os = "windows")'.dependencies]
+ accesskit.workspace = true
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -37,6 +37,7 @@
+ }
+ 
+ pub(crate) struct DirectXRenderer {
++    pub(crate) fast_gpu: crate::extensions::gpu_painter::GpuState,
+     hwnd: HWND,
+     pub(crate) atlas: Arc<DirectXAtlas>,
+     pub(crate) devices: Option<DirectXRendererDevices>,
+@@ -196,6 +197,7 @@
+             width: 1,
+             height: 1,
+             skip_draws: false,
++            fast_gpu: crate::extensions::gpu_painter::GpuState::default(),
+             fast_frame: crate::fast::frame::FrameState::default(),
+             fast_composition: crate::extensions::composition::DirectXComposition::default(),
+         })
+@@ -268,6 +270,7 @@
+     }
+ 
+     fn handle_device_lost_impl(&mut self, directx_devices: &DirectXDevices) -> Result<()> {
++        crate::extensions::gpu_painter::device_replaced(self);
+         crate::fast::layers::release_tiles(self);
+         crate::extensions::composition::release(self);
+         let disable_direct_composition = self.direct_composition.is_none();
+@@ -1299,6 +1302,7 @@
+ 
+ impl Drop for DirectXRenderer {
+     fn drop(&mut self) {
++        crate::extensions::gpu_painter::destroy(self);
+         #[cfg(debug_assertions)]
+         if let Some(devices) = &self.devices {
+             report_live_objects(&devices.device).ok();
+diff --git a/crates/gpui_windows/src/extensions/mod.rs b/crates/gpui_windows/src/extensions/mod.rs
+--- a/crates/gpui_windows/src/extensions/mod.rs
++++ b/crates/gpui_windows/src/extensions/mod.rs
+@@ -1 +1,2 @@
+ pub(crate) mod composition;
++pub(crate) mod gpu_painter;
+diff --git a/crates/gpui_windows/src/fast/frame.rs b/crates/gpui_windows/src/fast/frame.rs
+--- a/crates/gpui_windows/src/fast/frame.rs
++++ b/crates/gpui_windows/src/fast/frame.rs
+@@ -35,6 +35,7 @@
+ /// The renderer's gpui-fast state, kept from frame to frame.
+ #[derive(Default)]
+ pub(crate) struct FrameState {
++    pub(crate) native: crate::extensions::gpu_painter::NativeState,
+     pub(crate) globals: UploadedGlobals,
+     pub(crate) state: DrawState,
+     path_vertices: Vec<PathRasterizationSprite>,
+@@ -90,7 +91,7 @@
+         .annotation
+         .as_ref()
+         .is_some_and(|annotation| unsafe { annotation.GetStatus().as_bool() });
+-    if capturing && scene.layers.frames.is_empty() {
++    if capturing && scene.layers.frames.is_empty() && scene.gpu_paints.is_empty() {
+         return Ok(false);
+     }
+     let resources = renderer.resources.as_ref().context("resources missing")?;
+@@ -153,6 +154,7 @@
+     frame: &mut FrameState,
+     scene: &Scene,
+ ) -> Result<()> {
++    crate::extensions::gpu_painter::prepare(target, &mut frame.native, scene)?;
+     let result = draw_scene_masked(target, pipelines, frame, scene, None);
+     crate::fast::rounded_clip::bind(target, &mut frame.rounded_masks, None)?;
+     result
+@@ -174,7 +176,15 @@
+     frame.state.forget();
+     let mut restore_upload = false;
+ 
+-    for batch in scene.batches() {
++    for batch in scene.render_batches() {
++        let batch = match batch {
++            gpui::SceneBatch::Primitive(batch) => batch,
++            gpui::SceneBatch::GpuPaints(range) => {
++                crate::extensions::gpu_painter::draw(target, &mut frame.native, scene, range)?;
++                frame.state.forget();
++                continue;
++            }
++        };
+         if let PrimitiveBatch::PolychromeSprites {
+             texture_id,
+             ref range,
+diff --git a/crates/gpui_windows/src/window.rs b/crates/gpui_windows/src/window.rs
+--- a/crates/gpui_windows/src/window.rs
++++ b/crates/gpui_windows/src/window.rs
+@@ -1087,6 +1087,13 @@
+         self.0.hwnd
+     }
+ 
++    fn register_gpu_painter(
++        &self,
++        fast_registration: gpui::GpuPainterRegistration,
++    ) -> anyhow::Result<()> {
++        crate::extensions::gpu_painter::register(self, fast_registration)
++    }
++
+     fn gpu_specs(&self) -> Option<GpuSpecs> {
+         self.state.renderer.borrow().gpu_specs().log_err()
+     }

@@ -63,7 +63,9 @@ export function adaptToReleasedWgpu(source: string): string {
 
 export function prepare(config: ReleaseConfig, version: string, dest = DEST): void {
   versionFromTag("v" + version);
-  const workspace = readToml(resolve(ROOT, "Cargo.toml")).workspace;
+  run(["python3", "script/assemble"]);
+  const assembled = resolve(ROOT, "target/integration/workspace");
+  const workspace = readToml(resolve(assembled, "Cargo.toml")).workspace;
   rmSync(dest, { recursive: true, force: true });
   mkdirSync(dest, { recursive: true });
   writeFileSync(resolve(dest, "Cargo.toml"), Bun.TOML.stringify({
@@ -72,7 +74,7 @@ export function prepare(config: ReleaseConfig, version: string, dest = DEST): vo
   cpSync(resolve(ROOT, "rust-toolchain.toml"), resolve(dest, "rust-toolchain.toml"));
 
   for (const name of config.crates) {
-    const source = resolve(ROOT, "crates", name);
+    const source = resolve(assembled, "crates", name);
     const target = resolve(dest, name);
     cpSync(source, target, { recursive: true });
     const manifest = readToml(resolve(source, "Cargo.toml"));
@@ -130,10 +132,10 @@ export function prepare(config: ReleaseConfig, version: string, dest = DEST): vo
   const bundled = resolve(apple, "src/fast/release_gpui/src");
   mkdirSync(bundled, { recursive: true });
   for (const file of ["scene.rs", "geometry.rs", "color.rs", "window.rs", "platform.rs"]) {
-    cpSync(resolve(ROOT, "crates/gpui/src", file), resolve(bundled, file));
+    cpSync(resolve(assembled, "crates/gpui/src", file), resolve(bundled, file));
   }
   for (const directory of ["window", "platform"]) {
-    cpSync(resolve(ROOT, "crates/gpui/src", directory), resolve(bundled, directory), { recursive: true });
+    cpSync(resolve(assembled, "crates/gpui/src", directory), resolve(bundled, directory), { recursive: true });
   }
   const build = resolve(apple, "build.rs");
   const original = readFileSync(build, "utf8");
@@ -156,12 +158,14 @@ export function prepare(config: ReleaseConfig, version: string, dest = DEST): vo
     + " Vulkan surface-drop fix (gfx-rs/wgpu#10230)");
 
   // Apache-2.0 section 4(b) requires change notices in distributed copies.
-  const upstream = readToml(resolve(ROOT, "UPSTREAM"));
-  const changed = run([
-    "git", "diff", "--name-only", upstream.import_commit, "--", ...config.crates.map(name => "crates/" + name),
-  ], true).trim().split(/\r?\n/).filter(Boolean);
+  const changed = config.crates.flatMap(name =>
+    [...new Bun.Glob("**/*").scanSync({ cwd: resolve(assembled, "crates", name), onlyFiles: true })]
+      .map(file => resolve(ROOT, "crates", name, file))
+      .filter(file => !existsSync(resolve(ROOT, file))
+        || !readFileSync(resolve(assembled, relative(ROOT, file))).equals(readFileSync(file))),
+  );
   for (const filename of changed) {
-    const parts = relative(resolve(ROOT, "crates"), resolve(ROOT, filename)).split(sep);
+    const parts = relative(resolve(ROOT, "crates"), filename).split(sep);
     const distributed = [resolve(dest, ...parts)];
     if (parts[0] === "gpui" && parts[1] === "src") distributed.push(resolve(bundled, ...parts.slice(2)));
     for (const file of distributed) {

@@ -40,7 +40,7 @@ impl From<bool> for PaddedBool32 {
 #[expect(missing_docs)]
 pub struct Scene {
     pub(crate) paint_operations: Vec<PaintOperation>,
-    pub(crate) primitive_bounds: BoundsTree<ScaledPixels>,
+    primitive_bounds: BoundsTree<ScaledPixels>,
     layer_stack: Vec<DrawOrder>,
     pub shadows: Vec<Shadow>,
     pub quads: Vec<Quad>,
@@ -50,16 +50,11 @@ pub struct Scene {
     pub subpixel_sprites: Vec<SubpixelSprite>,
     pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
-    pub gpu_paints: crate::fast::gpu_scene::GpuPaints,
-    pub(crate) sort_scratch: crate::fast::scene::SortScratch,
-    pub(crate) fast_rounded_clip: crate::fast::rounded_clip::SceneClips,
-    pub layers: crate::fast::layers::scene::SceneLayers,
 }
 
 #[expect(missing_docs)]
 impl Scene {
     pub fn clear(&mut self) {
-        crate::fast::rounded_clip::clear(self);
         self.paint_operations.clear();
         self.primitive_bounds.clear();
         self.layer_stack.clear();
@@ -71,8 +66,6 @@ impl Scene {
         self.subpixel_sprites.clear();
         self.polychrome_sprites.clear();
         self.surfaces.clear();
-        crate::fast::gpu_scene::clear(self);
-        crate::fast::layers::scene::SceneLayers::clear(&mut self.layers);
     }
 
     pub fn len(&self) -> usize {
@@ -136,9 +129,6 @@ impl Scene {
                 sprite.order = order;
                 self.polychrome_sprites.push(*sprite);
             }
-            Primitive::FastGpuPaint(surface) => {
-                crate::fast::gpu_scene::insert(self, surface, order)
-            }
             Primitive::Surface(surface) => {
                 surface.order = order;
                 self.surfaces.push(surface.clone());
@@ -149,21 +139,27 @@ impl Scene {
     }
 
     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
-        crate::fast::layers::paint::replay_layers(self, range.clone(), prev_scene);
         for operation in &prev_scene.paint_operations[range] {
             match operation {
                 PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
                 PaintOperation::EndLayer => self.pop_layer(),
-                PaintOperation::FastRoundedClip(fast_clip) => {
-                    crate::fast::rounded_clip::record(self, *fast_clip)
-                }
             }
         }
     }
 
     pub fn finish(&mut self) {
-        crate::fast::scene::sort_in_drawing_order(self);
+        self.shadows.sort_by_key(|shadow| shadow.order);
+        self.quads.sort_by_key(|quad| quad.order);
+        self.paths.sort_by_key(|path| path.order);
+        self.underlines.sort_by_key(|underline| underline.order);
+        self.monochrome_sprites
+            .sort_by_key(|sprite| (sprite.order, sprite.tile.texture_id.index));
+        self.subpixel_sprites
+            .sort_by_key(|sprite| (sprite.order, sprite.tile.texture_id.index));
+        self.polychrome_sprites
+            .sort_by_key(|sprite| (sprite.order, sprite.tile.texture_id.index));
+        self.surfaces.sort_by_key(|surface| surface.order);
     }
 
     #[cfg_attr(
@@ -219,7 +215,6 @@ pub(crate) enum PaintOperation {
     Primitive(Primitive),
     StartLayer(Bounds<ScaledPixels>),
     EndLayer,
-    FastRoundedClip(crate::fast::rounded_clip::ClipOperation),
 }
 
 #[derive(Clone)]
@@ -233,7 +228,6 @@ pub enum Primitive {
     SubpixelSprite(SubpixelSprite),
     PolychromeSprite(PolychromeSprite),
     Surface(PaintSurface),
-    FastGpuPaint(crate::fast::gpu_scene::GpuPaintSurface),
 }
 
 #[expect(missing_docs)]
@@ -248,7 +242,6 @@ impl Primitive {
             Primitive::SubpixelSprite(sprite) => &sprite.bounds,
             Primitive::PolychromeSprite(sprite) => &sprite.bounds,
             Primitive::Surface(surface) => &surface.bounds,
-            Primitive::FastGpuPaint(fast_surface) => &fast_surface.bounds,
         }
     }
 
@@ -262,7 +255,6 @@ impl Primitive {
             Primitive::SubpixelSprite(sprite) => &sprite.content_mask,
             Primitive::PolychromeSprite(sprite) => &sprite.content_mask,
             Primitive::Surface(surface) => &surface.content_mask,
-            Primitive::FastGpuPaint(fast_surface) => &fast_surface.content_mask,
         }
     }
 }

@@ -131,7 +131,6 @@ impl Element for Anchored {
         if request_layout.child_layout_ids.is_empty() {
             return;
         }
-        crate::fast::layers::invalidate::note_anchored(window);
 
         let children_bounds = request_layout
             .child_layout_ids

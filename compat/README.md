@@ -5,17 +5,27 @@
 package with one of the same name and a version that meets the requirement.
 The crates here carry exactly those names and the version GPUI Kit pins, and
 each re-exports this repository's crate of the same library name
-(`pub use gpui_fast::*`), so an application on GPUI Kit, from crates.io or git
-alike, runs on gpui-fast with:
+(`pub use gpui_fast::*`). On this source-overlay branch, assemble the checkout
+before using local compatibility patches:
+
+```sh
+python3 script/assemble
+```
+
+Point the application at the **generated** compatibility crates (replace the
+checkout path below):
 
 ```toml
 [patch.crates-io]
-gpui-pre = { git = "https://github.com/longbridge/gpui-fast" }
-gpui-pre-platform = { git = "https://github.com/longbridge/gpui-fast" }
-gpui-pre-macros = { git = "https://github.com/longbridge/gpui-fast" }
-gpui-pre-sum-tree = { git = "https://github.com/longbridge/gpui-fast" }
+gpui-pre = { path = "/path/to/gpui-fast/target/integration/workspace/compat/gpui-pre" }
+gpui-pre-platform = { path = "/path/to/gpui-fast/target/integration/workspace/compat/gpui-pre-platform" }
+gpui-pre-macros = { path = "/path/to/gpui-fast/target/integration/workspace/compat/gpui-pre-macros" }
+gpui-pre-sum-tree = { path = "/path/to/gpui-fast/target/integration/workspace/compat/gpui-pre-sum-tree" }
 # and gpui-pre-web / gpui-pre-reqwest-client when the graph has them
 ```
+
+Direct Git dependencies on this development branch cannot run the assembler.
+Published releases remain self-contained and do not require Python or assembly.
 
 Each crate exposes the same features as the gpui-pre crate it stands in for,
 forwarded to ours. Nothing else lives here: gpui-fast's own crates keep

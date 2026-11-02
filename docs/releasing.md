@@ -46,7 +46,7 @@ local rehearsal to test before creating that tag.
 
 ## Release-only changes
 
-`bun script/prepare-release.ts --tag v0.1.0` generates `target/release-workspace`.
+`bun script/prepare-release.ts --tag v0.1.0` first assembles upstream and owned overlays, then generates `target/release-workspace` from the assembled crates. The packaged source bundles both performance and extension modules; consumers need no assembly tool.
 Only these generated copies receive package names, compatible sibling versions,
 registry dependency substitutions, repository/homepage URLs, descriptions,
 READMEs and license files. Original manifests and Rust source stay unchanged.

@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""Run Cargo against the assembled workspace, keeping the source lockfile current."""
+from pathlib import Path
+import os
+import shutil
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "integration"))
+from assemble import AssemblyError, assemble, assembly_lock, check_generated
+
+
+def main():
+    args = sys.argv[1:]
+    command = next((arg for arg in args if not arg.startswith(("+", "-"))), "")
+    if command == "fmt" and "--check" not in args:
+        raise AssemblyError("Use rustfmt on owned source files; script/cargo fmt supports -- --check only.")
+    with assembly_lock():
+        workspace = assemble(lock=False)
+        check_generated(workspace)
+        environment = dict(os.environ)
+        environment.setdefault("CARGO_TARGET_DIR", str(ROOT / "target"))
+        result = subprocess.run(["cargo", *args], cwd=workspace, env=environment)
+        if result.returncode == 0:
+            source = workspace / "Cargo.lock"
+            target = ROOT / "integration/workspace/Cargo.lock"
+            if source.exists() and source.read_bytes() != target.read_bytes():
+                shutil.copy2(source, target)
+        return result.returncode
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (AssemblyError, OSError, ValueError) as error:
+        print(error, file=sys.stderr)
+        sys.exit(1)

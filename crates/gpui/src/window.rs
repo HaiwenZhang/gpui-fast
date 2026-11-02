@@ -16,13 +16,13 @@ use crate::{
     PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow, Point,
     PolychromeSprite, Priority, PromptButton, PromptLevel, Quad, Render, RenderGlyphParams,
     RenderImage, RenderImageParams, RenderSvgParams, Replay, ResizeEdge, SMOOTH_SVG_SCALE_FACTOR,
-    ScaledPixels, Scene, Shadow, SharedString, Size, StrikethroughStyle, Style, SubpixelSprite,
-    SubscriberSet, Subscription, SystemWindowTab, SystemWindowTabController, TabStopMap,
-    TaffyLayoutEngine, Task, TextInputConfiguration, TextInputStateChange, TextRenderingMode,
-    TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix, Underline, UnderlineStyle,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControls, WindowDecorations,
-    WindowInsets, WindowOptions, WindowParams, WindowTextSystem, WindowVisibility, point,
-    prelude::*, px, rems, size, transparent_black,
+    SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
+    StrikethroughStyle, Style, SubpixelSprite, SubscriberSet, Subscription, SystemWindowTab,
+    SystemWindowTabController, TabStopMap, TaffyLayoutEngine, Task, TextInputConfiguration,
+    TextInputStateChange, TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState,
+    TransformationMatrix, Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControls, WindowDecorations, WindowInsets, WindowOptions, WindowParams,
+    WindowTextSystem, WindowVisibility, point, prelude::*, px, rems, size, transparent_black,
 };
 
 use crate::gestures::{GestureTuning, RecognizedTouchGesture, TouchGestureRecognizer};
@@ -41,6 +41,7 @@ use objc2_core_foundation::CFRetained;
 use objc2_core_video::CVPixelBuffer;
 use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 use raw_window_handle::{HandleError, HasDisplayHandle, HasWindowHandle};
+use refineable::Refineable;
 use scheduler::Instant;
 use slotmap::SlotMap;
 use smallvec::SmallVec;
@@ -119,7 +120,7 @@ impl DispatchPhase {
     }
 }
 
-pub(crate) struct WindowInvalidatorInner {
+struct WindowInvalidatorInner {
     #[cfg(feature = "profiler")]
     pub window_id: WindowId,
     pub dirty: bool,
@@ -154,7 +155,7 @@ enum FrameRateLimit {
 
 #[derive(Clone)]
 pub(crate) struct WindowInvalidator {
-    pub(crate) inner: Rc<RefCell<WindowInvalidatorInner>>,
+    inner: Rc<RefCell<WindowInvalidatorInner>>,
 }
 
 impl WindowInvalidator {
@@ -789,14 +790,11 @@ impl HitboxId {
     ///
     /// See [`Hitbox::is_hovered`] for details.
     pub fn is_hovered(self, window: &Window) -> bool {
-        if let Some(hovered) = crate::fast::retained::note_hover_read(window, self) {
-            return hovered;
-        }
         // If this hitbox has captured the pointer, it's always considered hovered
         if window.captured_hitbox == Some(self) {
             return true;
         }
-        if crate::fast::layers::hover_freeze::hides_hover(window) {
+        if window.last_input_was_keyboard() {
             return false;
         }
         self.hit_test(window)
@@ -814,7 +812,7 @@ impl HitboxId {
         self.hit_test(window)
     }
 
-    pub(crate) fn hit_test(self, window: &Window) -> bool {
+    fn hit_test(self, window: &Window) -> bool {
         let hit_test = &window.mouse_hit_test;
         for id in hit_test.ids.iter().take(hit_test.hover_hitbox_count) {
             if self == *id {
@@ -1010,7 +1008,7 @@ impl ElementIdStack {
     }
 
     /// The hash of the whole path on the stack.
-    pub(crate) fn hash(&self) -> u64 {
+    fn hash(&self) -> u64 {
         self.hashes
             .last()
             .copied()
@@ -1031,30 +1029,27 @@ impl std::ops::Deref for ElementIdStack {
 }
 
 pub(crate) struct DeferredDraw {
-    pub(crate) current_view: EntityId,
-    pub(crate) priority: usize,
-    pub(crate) parent_node: DispatchNodeId,
-    pub(crate) element_id_stack: ElementIdStack,
-    pub(crate) text_style_stack: crate::fast::text_style::TextStyleStack,
-    pub(crate) content_mask: Option<ContentMask<Pixels>>,
-    pub(crate) rem_size: Pixels,
-    pub(crate) element: Option<AnyElement>,
-    pub(crate) absolute_offset: Point<Pixels>,
-    pub(crate) prepaint_range: Range<PrepaintStateIndex>,
-    pub(crate) paint_range: Range<PaintIndex>,
-    pub(crate) enclosing_retained: crate::fast::retained::EnclosingRetained,
+    current_view: EntityId,
+    priority: usize,
+    parent_node: DispatchNodeId,
+    element_id_stack: ElementIdStack,
+    text_style_stack: Vec<TextStyleRefinement>,
+    content_mask: Option<ContentMask<Pixels>>,
+    rem_size: Pixels,
+    element: Option<AnyElement>,
+    absolute_offset: Point<Pixels>,
+    prepaint_range: Range<PrepaintStateIndex>,
+    paint_range: Range<PaintIndex>,
 }
 
 pub(crate) struct Frame {
     pub(crate) focus: Option<FocusId>,
     pub(crate) window_active: bool,
     pub(crate) element_states: FxHashMap<(GlobalElementId, TypeId), ElementStateBox>,
-    pub(crate) accessed_element_states: Vec<(GlobalElementId, TypeId)>,
+    accessed_element_states: Vec<(GlobalElementId, TypeId)>,
     pub(crate) mouse_listeners: Vec<Option<AnyMouseListener>>,
     pub(crate) dispatch_tree: DispatchTree,
     pub(crate) scene: Scene,
-    pub(crate) fast_composition_starts: crate::fast::composition::SurfaceStarts,
-    pub(crate) fast_composition_input: crate::fast::composition::SurfaceInput,
     pub(crate) hitboxes: Vec<Hitbox>,
     pub(crate) window_control_hitboxes: Vec<(WindowControlArea, Hitbox)>,
     pub(crate) deferred_draws: Vec<DeferredDraw>,
@@ -1064,38 +1059,35 @@ pub(crate) struct Frame {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) debug_bounds: FxHashMap<String, Bounds<Pixels>>,
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) debug_bounds_records: Vec<(String, Bounds<Pixels>)>,
+    debug_bounds_records: Vec<(String, Bounds<Pixels>)>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) next_inspector_instance_ids: FxHashMap<Rc<crate::InspectorElementPath>, usize>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
     pub(crate) tab_stops: TabStopMap,
-    pub(crate) retained: crate::fast::retained::RetainedSubtrees,
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct PrepaintStateIndex {
-    pub(crate) hitboxes_index: usize,
-    pub(crate) tooltips_index: usize,
-    pub(crate) deferred_draws_index: usize,
-    pub(crate) dispatch_tree_index: usize,
-    pub(crate) accessed_element_states_index: usize,
-    pub(crate) line_layout_index: LineLayoutIndex,
-    pub(crate) fast_a11y_index: usize,
+    hitboxes_index: usize,
+    tooltips_index: usize,
+    deferred_draws_index: usize,
+    dispatch_tree_index: usize,
+    accessed_element_states_index: usize,
+    line_layout_index: LineLayoutIndex,
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct PaintIndex {
-    pub(crate) scene_index: usize,
+    scene_index: usize,
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) debug_bounds_index: usize,
-    pub(crate) fast: crate::fast::retained::FastPaintIndex,
-    pub(crate) mouse_listeners_index: usize,
-    pub(crate) input_handlers_index: usize,
-    pub(crate) cursor_styles_index: usize,
-    pub(crate) accessed_element_states_index: usize,
-    pub(crate) tab_handle_index: usize,
-    pub(crate) line_layout_index: LineLayoutIndex,
+    debug_bounds_index: usize,
+    mouse_listeners_index: usize,
+    input_handlers_index: usize,
+    cursor_styles_index: usize,
+    accessed_element_states_index: usize,
+    tab_handle_index: usize,
+    line_layout_index: LineLayoutIndex,
 }
 
 impl Frame {
@@ -1114,8 +1106,6 @@ impl Frame {
             mouse_listeners: Vec::new(),
             dispatch_tree,
             scene: Scene::default(),
-            fast_composition_starts: crate::fast::composition::SurfaceStarts::default(),
-            fast_composition_input: crate::fast::composition::SurfaceInput::default(),
             hitboxes: Vec::new(),
             window_control_hitboxes: Vec::new(),
             deferred_draws: Vec::new(),
@@ -1134,7 +1124,6 @@ impl Frame {
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector_hitboxes: FxHashMap::default(),
             tab_stops: TabStopMap::default(),
-            retained: crate::fast::retained::RetainedSubtrees::default(),
         }
     }
 
@@ -1144,16 +1133,13 @@ impl Frame {
         self.mouse_listeners.clear();
         self.dispatch_tree.clear();
         self.scene.clear();
-        crate::fast::composition::SurfaceStarts::clear(&mut self.fast_composition_starts);
         self.input_handlers.clear();
         self.tooltip_requests.clear();
         self.cursor_styles.clear();
         self.hitboxes.clear();
-        crate::fast::composition::SurfaceInput::clear(&mut self.fast_composition_input);
         self.window_control_hitboxes.clear();
         self.deferred_draws.clear();
         self.tab_stops.clear();
-        crate::fast::retained::RetainedSubtrees::clear(&mut self.retained);
         self.focus = None;
 
         #[cfg(any(test, feature = "test-support"))]
@@ -1185,9 +1171,6 @@ impl Frame {
     }
 
     pub(crate) fn hit_test(&self, position: Point<Pixels>) -> HitTest {
-        if let Some(hit_test) = crate::fast::composition::hit_test(self, position) {
-            return hit_test;
-        }
         let mut set_hover_hitbox_count = false;
         let mut hit_test = HitTest::default();
         for hitbox in self.hitboxes.iter().rev() {
@@ -1247,26 +1230,20 @@ pub struct Window {
     pub(crate) display_observers: SubscriberSet<(), AnyObserver>,
     is_resizable: bool,
     is_minimizable: bool,
-    pub(crate) sprite_atlas: Arc<dyn PlatformAtlas>,
-    pub(crate) text_system: Arc<WindowTextSystem>,
+    sprite_atlas: Arc<dyn PlatformAtlas>,
+    text_system: Arc<WindowTextSystem>,
     text_rendering_mode: Rc<Cell<TextRenderingMode>>,
     rem_size: Pixels,
     /// The stack of override values for the window's rem size.
     ///
     /// This is used by `with_rem_size` to allow rendering an element tree with
     /// a given rem size.
-    pub(crate) rem_size_override_stack: SmallVec<[Pixels; 8]>,
+    rem_size_override_stack: SmallVec<[Pixels; 8]>,
     pub(crate) viewport_size: Size<Pixels>,
-    pub(crate) layout_engine: Option<TaffyLayoutEngine>,
-    pub(crate) fast_layout: crate::fast::layout_key::WindowLayout,
+    layout_engine: Option<TaffyLayoutEngine>,
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: ElementIdStack,
-    pub(crate) global_ids: crate::fast::global_id::GlobalIdCache,
-    pub(crate) retained_state: crate::fast::retained::RetainedState,
-    pub(crate) text_style_stack: crate::fast::text_style::TextStyleStack,
-    pub(crate) fast_glyph_bounds: crate::fast::glyphs::GlyphBoundsCache,
-    pub(crate) fast_layers: crate::fast::layers::WindowLayers,
-    pub(crate) fast_composition: crate::fast::composition::WindowCompositionHandle,
+    pub(crate) text_style_stack: Vec<TextStyleRefinement>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
     pub(crate) element_opacity: f32,
@@ -1288,9 +1265,9 @@ pub struct Window {
     focus_listeners: SubscriberSet<(), AnyWindowFocusListener>,
     pub(crate) focus_lost_listeners: SubscriberSet<(), AnyObserver>,
     focus_lost_path: SmallVec<[FocusId; 8]>,
-    pub(crate) default_prevented: bool,
-    pub(crate) mouse_position: Point<Pixels>,
-    pub(crate) mouse_hit_test: HitTest,
+    default_prevented: bool,
+    mouse_position: Point<Pixels>,
+    mouse_hit_test: HitTest,
     modifiers: Modifiers,
     capslock: Capslock,
     scale_factor: f32,
@@ -1298,11 +1275,11 @@ pub struct Window {
     appearance: WindowAppearance,
     pub(crate) appearance_observers: SubscriberSet<(), AnyObserver>,
     pub(crate) button_layout_observers: SubscriberSet<(), AnyObserver>,
-    pub(crate) active: Rc<Cell<bool>>,
+    active: Rc<Cell<bool>>,
     visibility: WindowVisibility,
     pub(crate) visibility_observers:
         SubscriberSet<(), Box<dyn FnMut(WindowVisibility, &mut Window, &mut App) -> bool>>,
-    pub(crate) hovered: Rc<Cell<bool>>,
+    hovered: Rc<Cell<bool>>,
     pub(crate) needs_present: Rc<Cell<bool>>,
     /// Tracks recent input event timestamps to determine if input is arriving at a high rate.
     /// Used to selectively enable VRR optimization only when input rate exceeds 60fps.
@@ -1328,9 +1305,9 @@ pub struct Window {
     pub(crate) client_inset: Option<Pixels>,
     /// The hitbox that has captured the pointer, if any.
     /// While captured, mouse events route to this hitbox regardless of hit testing.
-    pub(crate) captured_hitbox: Option<HitboxId>,
+    captured_hitbox: Option<HitboxId>,
     #[cfg(any(feature = "inspector", debug_assertions))]
-    pub(crate) inspector: Option<Entity<Inspector>>,
+    inspector: Option<Entity<Inspector>>,
     #[cfg(feature = "profiler")]
     debug_frame_overlay: crate::debug_overlay::DebugFrameOverlay,
     pub(crate) a11y: A11y,
@@ -2172,15 +2149,9 @@ impl Window {
             rem_size_override_stack: SmallVec::new(),
             viewport_size: content_size,
             layout_engine: Some(TaffyLayoutEngine::new()),
-            fast_layout: crate::fast::layout_key::WindowLayout::default(),
             root: None,
             element_id_stack: ElementIdStack::default(),
-            global_ids: crate::fast::global_id::GlobalIdCache::default(),
-            retained_state: crate::fast::retained::RetainedState::new(cx),
-            text_style_stack: crate::fast::text_style::TextStyleStack::default(),
-            fast_glyph_bounds: crate::fast::glyphs::GlyphBoundsCache::default(),
-            fast_layers: crate::fast::layers::WindowLayers::default(),
-            fast_composition: crate::fast::composition::WindowCompositionHandle::default(),
+            text_style_stack: Vec::new(),
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
             content_mask_stack: Vec::new(),
@@ -2506,7 +2477,11 @@ impl Window {
 
     /// The current text style. Which is composed of all the style refinements provided to `with_text_style`.
     pub fn text_style(&self) -> TextStyle {
-        (*crate::fast::text_style::text_style(self)).clone()
+        let mut style = TextStyle::default();
+        for refinement in &self.text_style_stack {
+            style.refine(refinement);
+        }
+        style
     }
 
     /// Check if the platform window is maximized.
@@ -2766,7 +2741,6 @@ impl Window {
     /// and skip the frame request when it is set.
     pub fn request_animation_frame(&self) {
         let entity = self.current_view();
-        crate::fast::layers::invalidate::note_animation_frame(self, entity);
         self.on_next_frame(move |_, cx| cx.notify(entity));
     }
 
@@ -3165,7 +3139,7 @@ impl Window {
         f: impl FnOnce(&GlobalElementId, &mut Self) -> R,
     ) -> R {
         self.with_id(element_id, |this| {
-            let global_id = crate::fast::global_id::current(this);
+            let global_id = this.element_id_stack.global_id();
 
             f(&global_id, this)
         })
@@ -3329,7 +3303,7 @@ impl Window {
     }
 
     #[inline]
-    pub(crate) fn snap_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<ScaledPixels> {
+    fn snap_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<ScaledPixels> {
         let scale_factor = self.scale_factor();
         let left = round_to_device_pixel(bounds.left().0, scale_factor);
         let top = round_to_device_pixel(bounds.top().0, scale_factor);
@@ -3367,7 +3341,7 @@ impl Window {
     }
 
     #[inline]
-    pub(crate) fn snapped_content_mask(&self) -> ContentMask<ScaledPixels> {
+    fn snapped_content_mask(&self) -> ContentMask<ScaledPixels> {
         ContentMask {
             bounds: self.cover_bounds(self.content_mask().bounds),
         }
@@ -3403,7 +3377,6 @@ impl Window {
 
     /// The position of the mouse relative to the window.
     pub fn mouse_position(&self) -> Point<Pixels> {
-        crate::fast::dependencies::read_pointer(self);
         self.mouse_position
     }
 
@@ -3443,7 +3416,6 @@ impl Window {
 
     /// The current state of the keyboard's modifiers
     pub fn modifiers(&self) -> Modifiers {
-        crate::fast::dependencies::read_keys(self);
         self.modifiers
     }
 
@@ -3460,7 +3432,6 @@ impl Window {
 
     /// The current state of the keyboard's capslock
     pub fn capslock(&self) -> Capslock {
-        crate::fast::dependencies::read_keys(self);
         self.capslock
     }
 
@@ -3493,7 +3464,6 @@ impl Window {
         // cached paint_range indices in reuse_paint find the handler at the
         // expected position.
         if let Some(input_handler) = self.platform_window.take_input_handler() {
-            crate::fast::retained::note_restored_input_handler(self, &input_handler);
             if let Some(slot) = self
                 .rendered_frame
                 .input_handlers
@@ -3535,7 +3505,6 @@ impl Window {
             .find_map(|h| h.take())
         {
             let accepts_text_input = input_handler.accepts_text_input(self, cx);
-            crate::fast::retained::note_installed_input_handler(self, &input_handler);
             self.platform_window.set_input_handler(input_handler);
             self.focus.filter(|_| accepts_text_input)
         } else {
@@ -3553,10 +3522,7 @@ impl Window {
         }
 
         self.layout_engine.as_mut().unwrap().clear();
-        crate::fast::layout_key::WindowLayout::end_frame(&mut self.fast_layout);
         self.text_system().finish_frame();
-        crate::fast::global_id::GlobalIdCache::finish_frame(&mut self.global_ids);
-        crate::fast::retained::finish_retained_frame(self);
         self.next_frame.finish(&mut self.rendered_frame);
 
         self.invalidator.set_phase(DrawPhase::Focus);
@@ -3646,7 +3612,6 @@ impl Window {
 
     fn invalidate_entities(&mut self) {
         let mut views = self.invalidator.take_views();
-        crate::fast::retained::RetainedState::note_notified(&mut self.retained_state, &views);
         for entity in views.drain() {
             self.mark_view_dirty(entity);
         }
@@ -3659,7 +3624,7 @@ impl Window {
         let _foreground_turn = profiler::journal::foreground_turn();
         #[cfg(feature = "profiler")]
         let present_start = Instant::now();
-        crate::fast::composition::present(self);
+        self.platform_window.draw(&self.rendered_frame.scene);
         #[cfg(feature = "profiler")]
         self.window_profiler.record_present(
             present_start,
@@ -3720,7 +3685,6 @@ impl Window {
     }
 
     fn draw_roots(&mut self, cx: &mut App) {
-        crate::fast::retained::begin_frame(self, cx);
         self.invalidator.set_phase(DrawPhase::Prepaint);
         self.tooltip_bounds.take();
 
@@ -3755,20 +3719,17 @@ impl Window {
         let request_layout_start = Instant::now();
         let mut root_element = self.root.as_ref().unwrap().clone().into_any_element();
         let root_layout_id = root_element.request_layout(self, cx);
-        crate::fast::stats::FramePhaseTimes::end_build(&mut self.fast_layout.phase_times);
         #[cfg(feature = "profiler")]
         let prepaint_start = Instant::now();
         self.layout_engine
             .as_mut()
             .unwrap()
             .stretch_auto_size_to_fill(root_layout_id, root_size, scale_factor);
-        crate::fast::composition::begin_base_prepaint(self);
         root_element.prepaint_as_root(Point::default(), root_size.into(), self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         let inspector_element = self.prepaint_inspector(_inspector_width, cx);
 
-        crate::fast::composition::begin_overlay_prepaint(self);
         self.prepaint_deferred_draws(cx);
 
         let mut prompt_element = None;
@@ -3794,21 +3755,17 @@ impl Window {
             tooltip_element = self.prepaint_tooltip(cx);
         }
 
-        crate::fast::stats::FramePhaseTimes::end_prepaint(&mut self.fast_layout.phase_times);
-        crate::fast::composition::finish_input(self);
         self.mouse_hit_test = self.next_frame.hit_test(self.mouse_position);
 
         // Now actually paint the elements.
         #[cfg(feature = "profiler")]
         let paint_start = Instant::now();
         self.invalidator.set_phase(DrawPhase::Paint);
-        crate::fast::composition::begin_base(self);
         root_element.paint(self, cx);
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.paint_inspector(inspector_element, cx);
 
-        crate::fast::composition::begin_overlay(self);
         self.paint_deferred_draws(cx);
 
         if let Some(mut prompt_element) = prompt_element {
@@ -3821,7 +3778,6 @@ impl Window {
 
         #[cfg(any(feature = "inspector", debug_assertions))]
         self.paint_inspector_hitbox(cx);
-        crate::fast::stats::FramePhaseTimes::end_paint(&mut self.fast_layout.phase_times);
 
         #[cfg(feature = "profiler")]
         self.window_profiler
@@ -3976,8 +3932,6 @@ impl Window {
 
                 let prepaint_start = self.prepaint_index();
                 if let Some(mut element) = element {
-                    let recording =
-                        crate::fast::retained::begin_deferred_prepaint(self, deferred_draw_ix, cx);
                     self.with_rendered_view(current_view, |window| {
                         window.with_rem_size(Some(rem_size), |window| {
                             window.with_absolute_element_offset(absolute_offset, |window| {
@@ -3985,7 +3939,6 @@ impl Window {
                             });
                         });
                     });
-                    crate::fast::retained::finish_deferred(self, recording, cx);
                     self.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
                 } else {
                     self.reuse_prepaint(prepaint_range);
@@ -4023,16 +3976,13 @@ impl Window {
             let paint_start = self.paint_index();
             let content_mask = deferred_draw.content_mask;
             if let Some(element) = deferred_draw.element.as_mut() {
-                let enclosing = &deferred_draw.enclosing_retained;
-                let recording = crate::fast::retained::begin_deferred_paint(self, enclosing, cx);
                 self.with_rendered_view(deferred_draw.current_view, |window| {
                     window.with_content_mask(content_mask, |window| {
                         window.with_rem_size(Some(deferred_draw.rem_size), |window| {
                             element.paint(window, cx);
                         });
                     })
-                });
-                crate::fast::retained::finish_deferred(self, recording, cx);
+                })
             } else {
                 self.reuse_paint(deferred_draw.paint_range.clone());
             }
@@ -4058,12 +4008,10 @@ impl Window {
             dispatch_tree_index: self.next_frame.dispatch_tree.len(),
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             line_layout_index: self.text_system.layout_index(),
-            fast_a11y_index: crate::fast::a11y::ops_index(self),
         }
     }
 
     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
-        crate::fast::a11y::reuse_prepaint(self, &range);
         self.next_frame.hitboxes.extend(
             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
                 .iter()
@@ -4110,7 +4058,6 @@ impl Window {
                     absolute_offset: deferred_draw.absolute_offset,
                     prepaint_range: deferred_draw.prepaint_range.clone(),
                     paint_range: deferred_draw.paint_range.clone(),
-                    enclosing_retained: crate::fast::retained::EnclosingRetained::default(),
                 }),
         );
     }
@@ -4120,7 +4067,6 @@ impl Window {
             scene_index: self.next_frame.scene.len(),
             #[cfg(any(test, feature = "test-support"))]
             debug_bounds_index: self.next_frame.debug_bounds_records.len(),
-            fast: crate::fast::retained::FastPaintIndex::new(self),
             mouse_listeners_index: self.next_frame.mouse_listeners.len(),
             input_handlers_index: self.next_frame.input_handlers.len(),
             cursor_styles_index: self.next_frame.cursor_styles.len(),
@@ -4131,8 +4077,6 @@ impl Window {
     }
 
     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
-        crate::fast::retained::reuse_paint_records(self, &range);
-        crate::fast::composition::reuse_starts(self, &range);
         // Cached elements still exist in the frame even when their paint methods don't run.
         #[cfg(any(test, feature = "test-support"))]
         for (selector, bounds) in &self.rendered_frame.debug_bounds_records
@@ -4596,7 +4540,6 @@ impl Window {
             absolute_offset,
             prepaint_range: PrepaintStateIndex::default()..PrepaintStateIndex::default(),
             paint_range: PaintIndex::default()..PaintIndex::default(),
-            enclosing_retained: crate::fast::retained::enclosing_retained(self),
         });
     }
 
@@ -4838,9 +4781,7 @@ impl Window {
         path.color = color.opacity(opacity);
         self.next_frame
             .scene
-            .insert_primitive(crate::fast::layers::paint::snap_path(
-                path.scale(scale_factor),
-            ));
+            .insert_primitive(path.scale(scale_factor));
     }
 
     /// Paint an underline into the scene for the next frame at the current z-index.
@@ -4909,7 +4850,17 @@ impl Window {
         let scale_factor = self.scale_factor();
         let glyph_origin = origin.scale(scale_factor);
 
-        let (integer_origin, subpixel_variant) = crate::fast::glyphs::quantize_origin(glyph_origin);
+        let quantized_origin = Point::new(
+            round_half_toward_zero(glyph_origin.x.0 * SUBPIXEL_VARIANTS_X as f32)
+                / SUBPIXEL_VARIANTS_X as f32,
+            round_half_toward_zero(glyph_origin.y.0 * SUBPIXEL_VARIANTS_Y as f32)
+                / SUBPIXEL_VARIANTS_Y as f32,
+        );
+        let subpixel_variant = Point::new(
+            (quantized_origin.x.fract() * SUBPIXEL_VARIANTS_X as f32) as u8,
+            (quantized_origin.y.fract() * SUBPIXEL_VARIANTS_Y as f32) as u8,
+        );
+        let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
         let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
         let dilation = self.text_system().glyph_dilation_for_color(color);
         let params = RenderGlyphParams {
@@ -4963,7 +4914,7 @@ impl Window {
         Ok(())
     }
 
-    pub(crate) fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
+    fn should_use_subpixel_rendering(&self, font_id: FontId, font_size: Pixels) -> bool {
         if self.platform_window.background_appearance() != WindowBackgroundAppearance::Opaque {
             return false;
         }
@@ -5001,7 +4952,7 @@ impl Window {
 
         let scale_factor = self.scale_factor();
         let glyph_origin = origin.scale(scale_factor);
-        let integer_origin = crate::fast::glyphs::quantize_emoji_origin(glyph_origin);
+        let integer_origin = glyph_origin.map(|c| ScaledPixels(round_half_toward_zero(c.0)));
         let params = RenderGlyphParams {
             font_id,
             glyph_id,
@@ -5286,9 +5237,7 @@ impl Window {
         let rem_size = self.rem_size();
         let scale_factor = self.scale_factor();
 
-        let fast_key = crate::fast::layout_key::layout_key(self);
         self.layout_engine.as_mut().unwrap().request_layout(
-            fast_key,
             style,
             rem_size,
             scale_factor,
@@ -5313,11 +5262,10 @@ impl Window {
 
         let rem_size = self.rem_size();
         let scale_factor = self.scale_factor();
-        let fast_key = crate::fast::layout_key::layout_key(self);
         self.layout_engine
             .as_mut()
             .unwrap()
-            .request_measured_layout(fast_key, style, rem_size, scale_factor, measure)
+            .request_measured_layout(style, rem_size, scale_factor, measure)
     }
 
     /// Compute the layout for the given id within the given available space.
@@ -5365,7 +5313,7 @@ impl Window {
     pub fn insert_hitbox(&mut self, bounds: Bounds<Pixels>, behavior: HitboxBehavior) -> Hitbox {
         self.invalidator.debug_assert_prepaint();
 
-        let content_mask = crate::fast::layers::input::hitbox_mask(self);
+        let content_mask = self.content_mask();
         let mut id = self.next_hitbox_id;
         self.next_hitbox_id = self.next_hitbox_id.next();
         let hitbox = Hitbox {
@@ -5375,7 +5323,6 @@ impl Window {
             behavior,
         };
         self.next_frame.hitboxes.push(hitbox.clone());
-        crate::fast::composition::record_input(self, id);
         hitbox
     }
 
@@ -5701,7 +5648,6 @@ impl Window {
             self.refresh();
         }
 
-        let ambient = crate::fast::dependencies::AmbientInput::of(self);
         // Handlers may set this to false by calling `stop_propagation`.
         cx.propagate_event = true;
         // Handlers may set this to true by calling `prevent_default`.
@@ -5817,10 +5763,7 @@ impl Window {
             }
             PlatformInput::KeyDown(_) | PlatformInput::KeyUp(_) => event,
         };
-        crate::fast::dependencies::AmbientInput::stamp_changes(ambient, self, cx);
-        crate::fast::layers::input::before_dispatch(self, cx, &event);
 
-        let native_target = crate::fast::composition::event_target(self, &event);
         if let Some(any_mouse_event) = event.mouse_event() {
             self.dispatch_mouse_event(any_mouse_event, cx);
         } else if let Some(any_key_event) = event.keyboard_event() {
@@ -5828,13 +5771,6 @@ impl Window {
         } else if let Some(touch_event) = event.touch_event() {
             self.dispatch_touch_event(touch_event, cx);
         }
-        crate::fast::composition::dispatch_native(
-            self,
-            &event,
-            native_target,
-            &mut cx.propagate_event,
-        );
-        crate::fast::layers::wheel::end_dispatch(self, cx);
         if let PlatformInput::LongPress(long_press) = &event {
             match long_press.phase {
                 crate::TouchPhase::Started if !self.default_prevented => {
@@ -6058,7 +5994,7 @@ impl Window {
         }
 
         // Bubble phase, where most normal handlers do their work.
-        if crate::fast::composition::bubble_mouse(self, event, cx) {
+        if cx.propagate_event {
             for listener in mouse_listeners.iter_mut().rev() {
                 let listener = listener.as_mut().unwrap();
                 listener(event, DispatchPhase::Bubble, self, cx);
@@ -7127,7 +7063,6 @@ impl Window {
         action: accesskit::Action,
         listener: impl FnMut(Option<&accesskit::ActionData>, &mut Window, &mut App) + 'static,
     ) {
-        crate::fast::a11y::A11yLog::action(&mut self.a11y.nodes.fast, node_id, action);
         self.a11y
             .action_listeners
             .entry(node_id)

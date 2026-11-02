@@ -1,24 +1,27 @@
 # gpui-fast for agents
 
-Read [CLAUDE.md](CLAUDE.md) and [docs/upstream-sync.md](docs/upstream-sync.md)
-before changing anything. In short:
+Read `CLAUDE.md` and `docs/upstream-sync.md` before changing anything.
 
-- **Everything gpui-fast changes relative to the baseline GPUI** (the import
-  commit in `UPSTREAM`) **is implemented in `crates/<crate>/src/fast/`**:
-  functions, types, algorithms, bookkeeping, tests and the comments that
-  explain them. Methods of upstream types go in `impl` blocks inside `fast/`.
-- **Upstream files only hold hooks**: a field typed by a `fast/` struct, a
-  one-line call into `fast/`, a body that only forwards to `fast/`, a
-  visibility bump, a `#[path = "fast/<file>.rs"]` redirect. No logic, and no
-  explanatory comments beyond what a hook needs to be understood.
-- **Outside `fast/`, name fast code by its full path at the point of use**
-  (`crate::fast::retained::RetainedState::new(cx)`), never through a `use`
-  line. The only `use` of `fast` outside `fast/` is `gpui.rs` exporting a
-  `test-support` item (`pub use fast::stats::LayoutStats;`). Inside `fast/`,
-  `use` lines are fine; never glob imports.
-- **No new public API**, and `script/check-upstream` must pass.
-- **Changes reach `main` through pull requests** from a topic branch; never
-  commit to `main` directly.
-- **Upstream sync commit titles use `chore: Sync GPUI upstream <zed-commit>`**,
-  for example `chore: Sync GPUI upstream a1b71072e5`. Do not start them with
-  `Merge`. Preserve replayed upstream commit messages and vendor history.
+- `crates/` and `tooling/perf/` are pristine upstream source, byte-for-byte
+  identical to `UPSTREAM.import_commit`. Do not edit them for local features.
+- Performance implementations and tests live in `fast/<crate>/src/`.
+  Native GPU drawing and composition live in `extensions/`; CAD has its own
+  workspace crate at `extensions/cad/`. Local applications live in `apps/`.
+- Upstream connection points belong in `integration/patches/`. Keep them small:
+  fields, forwarding calls, module declarations, visibility changes and redirects.
+  Name owned code explicitly by `crate::fast::...` or `crate::extensions::...`.
+  No glob imports in owned adapters; no imports hiding hooks in upstream files.
+- Sources needing GPUI private access are assembled as modules of the original
+  crate. Do not expose renderer internals or add public API just to move files.
+  Existing API exceptions remain recorded in `docs/upstream-sync.md`.
+- `integration/overlays.json` maps owned directories into the generated build
+  workspace. Never edit `target/integration/workspace/` as source.
+- Use `python3 script/cargo ...` to build/test/check. Bare Cargo commands at the
+  repository root are not the build entry point. The workspace manifest and
+  lockfile live in `integration/workspace/`.
+- Run `python3 script/check-upstream` and the appropriate assembled tests before
+  committing. The check verifies pristine source AND the generated hooks.
+- Changes reach `main` through pull requests from topic branches. Never commit
+  directly to `main`.
+- Upstream sync titles use `chore: Sync GPUI upstream <zed-commit>`; preserve
+  replayed upstream messages and vendor history. Do not use `Merge` titles.

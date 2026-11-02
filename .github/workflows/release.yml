@@ -7,6 +7,11 @@ on:
     paths:
       - '.github/workflows/release.yml'
       - 'release.toml'
+      - 'integration/**'
+      - 'fast/**'
+      - 'extensions/**'
+      - 'script/assemble'
+      - 'script/check-upstream'
       - 'script/prepare-release.ts'
       - 'script/publish-release.ts'
       - 'script/release-common.ts'

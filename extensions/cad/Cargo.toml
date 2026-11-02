@@ -1,0 +1,27 @@
+[package]
+name = "gpui_cad"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+license = "Apache-2.0"
+description = "Native GPU CAD viewport demonstration, independent of performance tooling"
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "cad_viewport"
+path = "src/main.rs"
+
+[features]
+runtime_shaders = ["gpui_platform_fast/runtime_shaders"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+anyhow.workspace = true
+block2.workspace = true
+foreign-types.workspace = true
+gpui_fast = { package = "gpui", path = "../../crates/gpui", default-features = false }
+gpui_platform_fast = { package = "gpui_platform", path = "../../crates/gpui_platform", default-features = false, features = ["font-kit"] }
+gpui_util.workspace = true
+metal.workspace = true
+objc2.workspace = true

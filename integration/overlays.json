@@ -1,0 +1,105 @@
+{
+  "version": 1,
+  "patches": [
+    {
+      "layer": "base",
+      "path": "integration/patches/base.patch"
+    },
+    {
+      "layer": "native-gpu",
+      "path": "integration/patches/native-gpu.patch"
+    }
+  ],
+  "overlays": [
+    {
+      "source": "fast/gpui/src",
+      "target": "crates/gpui/src/fast",
+      "layer": "base"
+    },
+    {
+      "source": "fast/gpui_apple/src",
+      "target": "crates/gpui_apple/src/fast",
+      "layer": "base"
+    },
+    {
+      "source": "fast/gpui_linux/src",
+      "target": "crates/gpui_linux/src/fast",
+      "layer": "base"
+    },
+    {
+      "source": "fast/gpui_macos/src",
+      "target": "crates/gpui_macos/src/fast",
+      "layer": "base"
+    },
+    {
+      "source": "fast/gpui_wgpu/src",
+      "target": "crates/gpui_wgpu/src/fast",
+      "layer": "base"
+    },
+    {
+      "source": "fast/gpui_windows/src",
+      "target": "crates/gpui_windows/src/fast",
+      "layer": "base"
+    },
+    {
+      "source": "extensions/composition/adapters/gpui/src",
+      "target": "crates/gpui/src/extensions",
+      "layer": "base"
+    },
+    {
+      "source": "extensions/composition/adapters/gpui_apple/src",
+      "target": "crates/gpui_apple/src/extensions",
+      "layer": "base"
+    },
+    {
+      "source": "extensions/composition/adapters/gpui_linux/src",
+      "target": "crates/gpui_linux/src/extensions",
+      "layer": "base"
+    },
+    {
+      "source": "extensions/composition/adapters/gpui_macos/src",
+      "target": "crates/gpui_macos/src/extensions",
+      "layer": "base"
+    },
+    {
+      "source": "extensions/composition/adapters/gpui_wgpu/src",
+      "target": "crates/gpui_wgpu/src/extensions",
+      "layer": "base"
+    },
+    {
+      "source": "extensions/composition/adapters/gpui_windows/src",
+      "target": "crates/gpui_windows/src/extensions",
+      "layer": "base"
+    },
+    {
+      "source": "extensions/native-gpu/adapters/gpui/src",
+      "target": "crates/gpui/src/extensions",
+      "layer": "native-gpu"
+    },
+    {
+      "source": "extensions/native-gpu/adapters/gpui_apple/src",
+      "target": "crates/gpui_apple/src/extensions",
+      "layer": "native-gpu"
+    },
+    {
+      "source": "extensions/native-gpu/adapters/gpui_linux/src",
+      "target": "crates/gpui_linux/src/extensions",
+      "layer": "native-gpu"
+    },
+    {
+      "source": "extensions/native-gpu/adapters/gpui_macos/src",
+      "target": "crates/gpui_macos/src/extensions",
+      "layer": "native-gpu"
+    },
+    {
+      "source": "extensions/native-gpu/adapters/gpui_wgpu/src",
+      "target": "crates/gpui_wgpu/src/extensions",
+      "layer": "native-gpu"
+    },
+    {
+      "source": "extensions/native-gpu/adapters/gpui_windows/src",
+      "target": "crates/gpui_windows/src/extensions",
+      "layer": "native-gpu"
+    }
+  ]
+}

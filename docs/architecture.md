@@ -52,10 +52,10 @@ most of the design follows from them.
    compiles and runs unchanged. Nothing opts in, and nothing new has to be
    learned beyond one rule that cached views already impose upstream (see
    [What an application must do](#what-an-application-must-do)).
-3. **Upstream's code stays upstream's.** gpui-fast's logic lives in `fast/`
-   directories. Upstream files get only small hooks into it, checked by
-   `script/check-upstream`, so Zed's changes keep merging in and each piece
-   can be proposed upstream on its own.
+3. **Upstream's code stays upstream's.** `crates/` stays pristine. Local code
+   lives in `fast/` and `extensions/`; `integration/patches/` connects it in
+   the generated build workspace. `script/check-upstream` checks both pristine
+   source and the assembled hooks.
 
 ## GPUI's frame, and the mechanism gpui-fast builds on
 
@@ -726,27 +726,18 @@ full table and the commands to reproduce it.
 
 ## Staying close to upstream
 
-All of the above lives in `crates/gpui/src/fast/`. Upstream files contain
-only hooks: a field holding a `fast/` struct, a one-line call, a method body
-that forwards to `fast/`, a visibility change, or a `#[path]` redirect to a
-rewrite (the bounds tree is one).
+Upstream source in `crates/` and `tooling/perf/` matches the recorded vendor import
+exactly. Performance implementations live in `fast/<crate>/src/`, composition and
+native GPU adapters in `extensions/`, and host connection points in
+`integration/patches/`. The assembler composes them into
+`target/integration/workspace/`, retaining the original crate boundaries and
+private access without exposing renderer internals.
 
-`script/check-upstream` compares every upstream file with the upstream commit
-it came from and fails a change that is more than a hook: a hunk that adds
-more than 8 lines, a file that adds more than 40, or added lines that do not
-call into `fast/`. The exceptions are listed, each with its reason, in
-`script/upstream-allowlist`. As of this writing, 30 files in the tracked
-upstream directories differ from upstream; the 20 of them in
-`crates/gpui/src` differ by +609 and −776 lines. More lines are
-removed than added, because several method bodies are replaced by a call into
-`fast/`.
+`python3 script/check-upstream` checks pristine source first, then applies the
+patches and checks their generated hooks against the existing budgets. The
+[upstream sync guide](upstream-sync.md) records API exceptions, build commands,
+source ownership and how to update connection points after a vendor sync.
 
-The public API has one exception, which renderers need: `Scene.layers` and
-the types it holds, listed in [`upstream-sync.md`](upstream-sync.md).
-
-That shape serves two purposes. Upstream changes keep merging in with
-conflicts confined to hook lines. And each mechanism in `fast/` is a
-self-contained piece (retained layout nodes, the bounds grid, text
-measurement carrying, retained views, scroll layers) that can be proposed to
-GPUI on its own. [`scroll-layers.md`](scroll-layers.md) is the reference for
-scroll layers: where they apply, how they fall back, and how to measure them.
+The mechanisms described above remain separable performance work. Source
+separation removes local implementations from upstream merges, while behavioral
+changes in upstream's replaced algorithms still need review and regression tests.

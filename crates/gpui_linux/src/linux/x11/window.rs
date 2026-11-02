@@ -271,8 +271,7 @@ pub struct X11WindowState {
     scale_factor: f32,
     /// Taken when the window is dropped. Its GPU objects use the X connection, so they mustn't
     /// outlive the window, which a display mode switch relies on.
-    pub(crate) renderer: Option<WgpuRenderer>,
-    pub(crate) fast_composition: crate::fast::composition::x11::Composition,
+    renderer: Option<WgpuRenderer>,
     display: Rc<dyn PlatformDisplay>,
     input_handler: Option<PlatformInputHandler>,
     appearance: WindowAppearance,
@@ -312,7 +311,7 @@ impl X11WindowState {
 pub(crate) struct X11WindowStatePtr {
     pub state: Rc<RefCell<X11WindowState>>,
     pub(crate) callbacks: Rc<RefCell<Callbacks>>,
-    pub(crate) xcb: Rc<XCBConnection>,
+    xcb: Rc<XCBConnection>,
     pub(crate) x_window: xproto::Window,
 }
 
@@ -838,12 +837,6 @@ impl X11WindowState {
                 bounds: bounds.to_pixels(scale_factor),
                 scale_factor,
                 renderer: Some(renderer),
-                fast_composition: crate::fast::composition::x11::Composition::new(
-                    xcb,
-                    x_window,
-                    visual.depth,
-                    visual.id,
-                ),
                 atoms: *atoms,
                 input_handler: None,
                 active: false,
@@ -894,7 +887,6 @@ impl Drop for X11Window {
             parent.state.borrow_mut().children.remove(&self.0.x_window);
         }
 
-        crate::fast::composition::x11::Composition::destroy(&state.fast_composition);
         // The renderer's GPU objects use the X connection, and a display mode switch closes the
         // connection once no window is left in the client's window map, so both go now.
         state.renderer.take();
@@ -1790,25 +1782,6 @@ impl PlatformWindow for X11Window {
         }
     }
 
-    fn draw_composed(&self, scene: gpui::ComposedScene<'_>) {
-        crate::fast::composition::x11::draw_composed(self, scene)
-    }
-
-    fn enable_window_composition(&self) -> anyhow::Result<()> {
-        crate::fast::composition::x11::enable_window_composition(self)
-    }
-
-    fn create_native_surface(&self) -> anyhow::Result<Rc<dyn gpui::PlatformSurfaceAttachment>> {
-        crate::fast::composition::x11::create_native_surface(self)
-    }
-
-    fn set_composition_order(
-        &self,
-        fast_surfaces: &[gpui::PlatformCompositionSurface],
-    ) -> anyhow::Result<()> {
-        crate::fast::composition::x11::set_composition_order(self, fast_surfaces)
-    }
-
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.0
             .state
@@ -2001,13 +1974,6 @@ impl PlatformWindow for X11Window {
         let client = state.client.clone();
         drop(state);
         client.update_ime_position(bounds);
-    }
-
-    fn register_gpu_painter(
-        &self,
-        fast_registration: gpui::GpuPainterRegistration,
-    ) -> anyhow::Result<()> {
-        crate::fast::gpu_painter::x11(self, fast_registration)
     }
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {

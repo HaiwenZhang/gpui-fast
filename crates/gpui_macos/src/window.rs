@@ -81,7 +81,7 @@ use std::{
     time::Duration,
 };
 
-pub(crate) const WINDOW_STATE_IVAR: &str = "windowState";
+const WINDOW_STATE_IVAR: &str = "windowState";
 
 static RESTORES_WORKSPACE_AT_LAUNCH_DEFAULT: Once = Once::new();
 
@@ -105,7 +105,7 @@ const NSPopUpWindowLevel: NSInteger = 101;
 #[allow(non_upper_case_globals)]
 const NSWindowAnimationBehaviorUtilityWindow: NSInteger = 4;
 #[allow(non_upper_case_globals)]
-pub(crate) const NSViewLayerContentsRedrawDuringViewResize: NSInteger = 2;
+const NSViewLayerContentsRedrawDuringViewResize: NSInteger = 2;
 // https://developer.apple.com/documentation/appkit/nsdragoperation
 type NSDragOperation = NSUInteger;
 #[allow(non_upper_case_globals)]
@@ -297,7 +297,6 @@ unsafe fn build_classes() {
             );
             decl.register()
         };
-        crate::fast::composition::build_overlay_view_class();
         BLURRED_VIEW_CLASS = {
             let mut decl = ClassDecl::new("BlurredView", class!(NSVisualEffectView)).unwrap();
             decl.add_method(
@@ -431,7 +430,6 @@ unsafe fn build_window_class(name: &'static str, superclass: &Class) -> *const C
     unsafe {
         let mut decl = ClassDecl::new(name, superclass).unwrap();
         decl.add_ivar::<*mut c_void>(WINDOW_STATE_IVAR);
-        crate::fast::composition::register_window_input(&mut decl, superclass);
         decl.add_method(sel!(dealloc), dealloc_window as extern "C" fn(&Object, Sel));
 
         decl.add_method(
@@ -657,21 +655,20 @@ unsafe fn apply_simple_fullscreen_plan(
     }
 }
 
-pub(crate) struct MacWindowState {
+struct MacWindowState {
     handle: AnyWindowHandle,
     foreground_executor: ForegroundExecutor,
     background_executor: BackgroundExecutor,
     native_window: id,
-    pub(crate) native_view: NonNull<Object>,
-    pub(crate) fast_composition: crate::fast::composition::MacComposition,
+    native_view: NonNull<Object>,
     blurred_view: Option<id>,
     background_appearance: WindowBackgroundAppearance,
     cursor_style: CursorStyle,
     cursor_visible: Arc<AtomicBool>,
     frame_source: Option<WindowFrameSource>,
-    pub(crate) renderer: renderer::Renderer,
+    renderer: renderer::Renderer,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
-    pub(crate) event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
+    event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
     activate_callback: Option<Box<dyn FnMut(bool)>>,
     visibility_callback: Option<Box<dyn FnMut(WindowVisibility)>>,
     // `None` until a callback is registered, so notifications during
@@ -935,13 +932,13 @@ impl MacWindowState {
         )
     }
 
-    pub(crate) fn content_size(&self) -> Size<Pixels> {
+    fn content_size(&self) -> Size<Pixels> {
         let NSSize { width, height, .. } =
             unsafe { NSView::frame(self.native_window.contentView()) }.size;
         size(px(width as f32), px(height as f32))
     }
 
-    pub(crate) fn scale_factor(&self) -> f32 {
+    fn scale_factor(&self) -> f32 {
         get_scale_factor(self.native_window)
     }
 
@@ -958,7 +955,7 @@ impl MacWindowState {
 
 unsafe impl Send for MacWindowState {}
 
-pub(crate) struct MacWindow(pub(crate) Arc<Mutex<MacWindowState>>, MainThreadMarker);
+pub(crate) struct MacWindow(Arc<Mutex<MacWindowState>>, MainThreadMarker);
 
 impl MacWindow {
     pub fn open(
@@ -1099,9 +1096,6 @@ impl MacWindow {
                 background_executor,
                 native_window,
                 native_view: NonNull::new_unchecked(native_view),
-                fast_composition: crate::fast::composition::MacComposition::new(
-                    renderer_context.clone(),
-                ),
                 blurred_view: None,
                 background_appearance: WindowBackgroundAppearance::Opaque,
                 cursor_style: CursorStyle::Arrow,
@@ -2134,34 +2128,8 @@ impl PlatformWindow for MacWindow {
         this.renderer.draw(scene);
     }
 
-    fn draw_composed(&self, scene: gpui::ComposedScene<'_>) {
-        crate::fast::composition::draw_composed(&self.0, scene)
-    }
-
-    fn enable_window_composition(&self) -> anyhow::Result<()> {
-        crate::fast::composition::enable_window_composition(&self.0)
-    }
-
-    fn create_native_surface(&self) -> anyhow::Result<Rc<dyn gpui::PlatformSurfaceAttachment>> {
-        crate::fast::composition::create_native_surface(&self.0)
-    }
-
-    fn set_composition_order(
-        &self,
-        fast_surfaces: &[gpui::PlatformCompositionSurface],
-    ) -> anyhow::Result<()> {
-        crate::fast::composition::set_composition_order(&self.0, fast_surfaces)
-    }
-
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.0.lock().renderer.sprite_atlas().clone()
-    }
-
-    fn register_gpu_painter(
-        &self,
-        fast_registration: gpui::GpuPainterRegistration,
-    ) -> anyhow::Result<()> {
-        crate::fast::gpu_painter::register(self, fast_registration)
     }
 
     fn gpu_specs(&self) -> Option<gpui::GpuSpecs> {
@@ -2495,7 +2463,7 @@ unsafe fn is_gpui_window(window: id) -> bool {
     }
 }
 
-pub(crate) unsafe fn get_window_state(object: &Object) -> Arc<Mutex<MacWindowState>> {
+unsafe fn get_window_state(object: &Object) -> Arc<Mutex<MacWindowState>> {
     unsafe {
         let raw: *mut c_void = *object.get_ivar(WINDOW_STATE_IVAR);
         let rc1 = Arc::from_raw(raw as *mut Mutex<MacWindowState>);
@@ -2505,7 +2473,7 @@ pub(crate) unsafe fn get_window_state(object: &Object) -> Arc<Mutex<MacWindowSta
     }
 }
 
-pub(crate) unsafe fn drop_window_state(object: &Object) {
+unsafe fn drop_window_state(object: &Object) {
     unsafe {
         let raw: *mut c_void = *object.get_ivar(WINDOW_STATE_IVAR);
         Arc::from_raw(raw as *mut Mutex<MacWindowState>);
@@ -2820,13 +2788,10 @@ extern "C" fn handle_key_event(this: &Object, native_event: id, key_equivalent: 
     }
 }
 
-pub(crate) extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
+extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
     let window_state = unsafe { get_window_state(this) };
     let weak_window_state = Arc::downgrade(&window_state);
     let mut lock = window_state.as_ref().lock();
-    if crate::fast::composition::native_event_observed(&lock, native_event) {
-        return;
-    }
     let window_height = lock.content_size().height;
     let native_event_type = unsafe { native_event.eventType() };
     match native_event_type {
@@ -2975,8 +2940,8 @@ pub(crate) extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: 
 
         if let Some(mut callback) = lock.event_callback.take() {
             drop(lock);
-            let result = callback(event);
-            crate::fast::composition::complete_event(&window_state, native_event, callback, result);
+            callback(event);
+            window_state.lock().event_callback = Some(callback);
         }
     }
 }
@@ -3145,7 +3110,6 @@ fn update_window_scale_factor(window_state: &Arc<Mutex<MacWindowState>>) {
     }
 
     lock.renderer.update_drawable_size(drawable_size);
-    crate::fast::composition::scale_factor_changed(&mut lock, scale_factor, drawable_size);
 
     if let Some(mut callback) = lock.resize_callback.take() {
         let content_size = lock.content_size();
@@ -3235,7 +3199,7 @@ extern "C" fn window_did_change_key_status(this: &Object, selector: Sel, _: id) 
 
         if lock.activated_least_once {
             if let Some(mut callback) = lock.request_frame_callback.take() {
-                crate::fast::composition::set_presents_with_transaction(&mut lock, true);
+                lock.renderer.set_presents_with_transaction(true);
                 lock.stop_display_link();
                 drop(lock);
                 callback(RequestFrameOptions {
@@ -3246,7 +3210,7 @@ extern "C" fn window_did_change_key_status(this: &Object, selector: Sel, _: id) 
 
                 let mut lock = window_state.lock();
                 lock.request_frame_callback = Some(callback);
-                crate::fast::composition::set_presents_with_transaction(&mut lock, false);
+                lock.renderer.set_presents_with_transaction(false);
                 lock.start_display_link();
             }
         } else {
@@ -3346,7 +3310,6 @@ extern "C" fn set_frame_size(this: &Object, _: Sel, size: NSSize) {
     let scale_factor = lock.scale_factor();
     let drawable_size = new_size.to_device_pixels(scale_factor);
     lock.renderer.update_drawable_size(drawable_size);
-    crate::fast::composition::drawable_size_changed(&mut lock, drawable_size);
 
     if let Some(mut callback) = lock.resize_callback.take() {
         let content_size = lock.content_size();
@@ -3362,7 +3325,7 @@ extern "C" fn display_layer(this: &Object, _: Sel, _: id) {
     let window_state = unsafe { get_window_state(this) };
     let mut lock = window_state.lock();
     if let Some(mut callback) = lock.request_frame_callback.take() {
-        crate::fast::composition::set_presents_with_transaction(&mut lock, true);
+        lock.renderer.set_presents_with_transaction(true);
         lock.stop_display_link();
         drop(lock);
         callback(RequestFrameOptions {
@@ -3373,7 +3336,7 @@ extern "C" fn display_layer(this: &Object, _: Sel, _: id) {
 
         let mut lock = window_state.lock();
         lock.request_frame_callback = Some(callback);
-        crate::fast::composition::set_presents_with_transaction(&mut lock, false);
+        lock.renderer.set_presents_with_transaction(false);
         lock.start_display_link();
     }
 }

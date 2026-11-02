@@ -2,7 +2,7 @@
 
 How gpui-fast draws a frame from the last one, what an application needs to
 know about it, and how it is checked and measured. The code is in
-`crates/gpui/src/fast/`: `retained.rs` (retained subtrees), `dependencies.rs`
+`fast/gpui/src/`: `retained.rs` (retained subtrees), `dependencies.rs`
 (what a subtree read), `layout.rs` and `layout_key.rs` (retained layout nodes)
 and `stats.rs` (counters for tests and benchmarks). The reasoning behind the
 design is in [`architecture.md`](architecture.md).
@@ -68,7 +68,7 @@ platform. Views are still drawn from the last frame then: each frame logs
 what building its tree did — a node pushed, a synthetic child added, a node
 finished, an element made focusable, an active descendant claimed — and a
 stretch of the frame drawn again does again what its part of the log did,
-through the same builder (`crates/gpui/src/fast/a11y.rs`). Its nodes hang off
+through the same builder (`fast/gpui/src/a11y.rs`). Its nodes hang off
 whatever node is open where the stretch lands, a node finished again has the
 children this frame gave it (a view spliced around a nested view built again
 gets the nested view's new nodes), and the focus is asked again, so the
@@ -93,7 +93,7 @@ scroll or list state moved — is marked dirty as if notified, so the views
 around it are drawn from the last frame around it rather than built again
 because something nested in them changed. The more of a window is split into
 views, the less a change costs. The code is in
-`crates/gpui/src/fast/splice.rs`.
+`fast/gpui/src/splice.rs`.
 
 A view counts as having read itself, so an application that changes a view
 outside drawing (`entity.update(..)`) and notifies it gets it built again on
@@ -195,20 +195,20 @@ upstream does.
 
 A retained frame has to be the frame drawing from scratch would have produced.
 
-- The oracle test (`crates/gpui/src/fast/tests/oracle.rs`) drives two windows
+- The oracle test (`fast/gpui/src/tests/oracle.rs`) drives two windows
   through the same random history, one drawing incrementally and one from
   scratch, and requires every frame to match. It covers sibling, nested and
   deferred views notified alone, a model read without being observed, and a
   global, and asserts that views really were reused.
-- `crates/gpui/src/fast/tests/retained.rs` covers reuse, rebuilding when a
+- `fast/gpui/src/tests/retained.rs` covers reuse, rebuilding when a
   dependency or a hover changes, moved views and retention turned off.
-- `cargo run -p gpui_perf --release -- --headless --verify` compares the quads,
+- `python3 script/cargo run -p gpui_perf --release -- --headless --verify` compares the quads,
   text, icons and images painted with retention on and off on every frame of
   every simulated screen.
 
 ```sh
-cargo test -p gpui --features test-support
-cargo run -p gpui_perf --release -- --headless --verify
+python3 script/cargo test -p gpui --features test-support
+python3 script/cargo run -p gpui_perf --release -- --headless --verify
 ```
 
 ## How it is measured
@@ -216,15 +216,15 @@ cargo run -p gpui_perf --release -- --headless --verify
 Measure release builds only. [`CONTRIBUTING.md`](../CONTRIBUTING.md#measuring)
 has the full usage.
 
-`cargo run -p gpui_perf --release` opens the showcase: a component gallery
+`python3 script/cargo run -p gpui_perf --release` opens the showcase: a component gallery
 shaped like GPUI Kit's, which scrolls its sidebar, a page or a data table by
 itself, refreshes the table on a timer, and shows in its status bar what each
 frame costs. `--auto` runs each of those with retention on and off and prints
 the comparison:
 
 ```sh
-cargo run -p gpui_perf --release
-cargo run -p gpui_perf --release -- --auto
+python3 script/cargo run -p gpui_perf --release
+python3 script/cargo run -p gpui_perf --release -- --auto
 ```
 
 With `--headless`, `gpui_perf` drives simulated screens — forms, lists, a
@@ -232,8 +232,8 @@ data table, a settings page — without a window, with real text shaping, with
 retention on and off, and compares what each frame cost:
 
 ```sh
-cargo run -p gpui_perf --release -- --headless
-cargo run -p gpui_perf --release -- --headless --scenario table --frames 200
+python3 script/cargo run -p gpui_perf --release -- --headless
+python3 script/cargo run -p gpui_perf --release -- --headless --scenario table --frames 200
 ```
 
 The `views_frames` example draws a dashboard of panel views into a real
@@ -242,13 +242,13 @@ frame. It prints main-thread CPU per frame and the build, prepaint and paint
 times:
 
 ```sh
-cargo run -p gpui_perf --example views_frames --release -- 60 64 2
-GPUI_VIEW_RETENTION=0 cargo run -p gpui_perf --example views_frames --release -- 60 64 2
+python3 script/cargo run -p gpui_perf --example views_frames --release -- 60 64 2
+GPUI_VIEW_RETENTION=0 python3 script/cargo run -p gpui_perf --example views_frames --release -- 60 64 2
 ```
 
 A headless benchmark of 60 panel views × 64 labels is in
-`crates/gpui/src/fast/tests/retained_bench.rs`:
+`fast/gpui/src/tests/retained_bench.rs`:
 
 ```sh
-cargo test -p gpui --lib --release retained_bench -- --ignored --nocapture
+python3 script/cargo test -p gpui --lib --release retained_bench -- --ignored --nocapture
 ```

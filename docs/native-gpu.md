@@ -101,7 +101,7 @@ demonstrates MSAA resolve, clipping, opacity and offscreen caching. Run it from
 the repository root:
 
 ```sh
-cargo run -p gpui_perf --example cad_viewport --features gpui_platform_fast/runtime_shaders
+python3 script/cargo run -p gpui_cad --bin cad_viewport --features gpui_cad/runtime_shaders
 ```
 
 Click each viewport's rendering mode to switch paths and pause animation to reuse
@@ -120,7 +120,11 @@ Ported from `Pomelo-Native/references/zed` at `9c2861ccaa`, branch
 - `d7549ea249` — Add shared-pass GPU drawing for CAD viewports
 - `9c2861ccaa` — Unify GPU painter API across native backends
 
-The implementation and regression tests live under each crate's `src/fast/`.
+The implementation and regression tests live in `extensions/native-gpu/adapters/`,
+organized by host crate. They are assembled as `extensions` modules inside those
+crates, preserving the existing API and private access. The CAD demonstration and
+its shader/tests live in the separate `extensions/cad/` package; performance
+tooling lives in `apps/gpui_perf/`.
 Native commands are retained as scene primitives so balanced replay, composition
 splitting, content-mask intersection and scrolling translations keep their snapshots.
 Scrolling content containing native paints is replayed into the current frame;
@@ -136,12 +140,15 @@ share the same native types and backend device.
 
 ## Validation
 
-On macOS, the `fast::` library regressions pass: 351 GPUI tests, 33 Metal
-renderer tests, and 42 WGPU tests (three manual performance tests stay ignored).
-The CAD example's three GPU tests and both typed-handle doctests pass as well.
-`script/check-upstream`, `git diff --check` and scoped Clippy complete; Clippy
-reports existing profiler visibility and duplicate fixture-module warnings.
-Windows D3D11 cross-checks with `--target x86_64-pc-windows-gnu
---no-default-features`; this host does not have Windows resource compiler tools.
-Linux cross-checking is blocked by the missing `x86_64-linux-musl-g++` toolchain;
-X11/Wayland need a native Linux build and runtime check.
+The source-overlay version passes 393 performance and 32 extension library tests
+on macOS, including real Metal/WGPU rendering. Three manual performance tests
+remain ignored. The independent CAD package passes all three real-GPU tests.
+The performance/composition-only assembly also checks successfully without the
+native GPU layer. Windows D3D11 cross-checks with
+`--target x86_64-pc-windows-gnu --no-default-features`; Windows/Linux runtime
+rendering still needs testing on those hosts.
+
+Assembly failure isolation and release preparation have their own tests. The
+upstream check requires 421 original files to match their import exactly before
+checking the assembled hooks. See [source ownership](upstream-sync.md) for the
+build and validation commands.

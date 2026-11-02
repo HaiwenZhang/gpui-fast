@@ -202,7 +202,7 @@ impl WgpuContext {
         any(test, feature = "bench-support", feature = "test-support")
     ))]
     fn create_headless() -> anyhow::Result<(Self, wgpu::TextureFormat)> {
-        let instance = crate::fast::rounded_clip::headless_instance();
+        let instance = Self::instance(None);
         let device_id_filter = Self::device_id_filter();
         let (adapter, device, queue, dual_source_blending, color_texture_format, target_format) =
             gpui::block_on(async {
@@ -416,7 +416,7 @@ impl WgpuContext {
         Ok(PreparedWebGraphics { context, surface })
     }
 
-    pub(crate) async fn create_device(
+    async fn create_device(
         adapter: &wgpu::Adapter,
     ) -> anyhow::Result<(wgpu::Device, wgpu::Queue, bool, TextureFormat)> {
         let dual_source_blending = adapter

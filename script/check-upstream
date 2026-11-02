@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checks that gpui-fast only adds small hooks to upstream files.
+"""Checks pristine upstream source and the hooks in the assembled workspace.
 
 Compares every file in the upstream directories listed in `UPSTREAM` with
 upstream's version of it and fails when a change is more than a hook. The
@@ -9,7 +9,8 @@ By default upstream's version is read from our own history, at the
 `import_commit` recorded in `UPSTREAM`. With `--zed <checkout>` it is read
 from a zed checkout at the recorded `zed_commit` instead.
 
-The working tree is checked, including uncommitted and untracked files.
+Pristine sources are verified byte-for-byte before assembly. The generated
+hooks and owned modules are then checked, including uncommitted source edits.
 """
 
 import argparse
@@ -19,16 +20,20 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-UPSTREAM_FILE = os.path.join(ROOT, "UPSTREAM")
-ALLOWLIST_FILE = os.path.join(ROOT, "script", "upstream-allowlist")
+SOURCE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = SOURCE_ROOT
+UPSTREAM_FILE = os.path.join(SOURCE_ROOT, "UPSTREAM")
+ALLOWLIST_FILE = os.path.join(SOURCE_ROOT, "script", "upstream-allowlist")
+sys.path.insert(0, os.path.join(SOURCE_ROOT, "integration"))
+from assemble import AssemblyError, assemble, verify_pristine
 
 # Files that may differ from upstream, be added or be removed anywhere.
 ALWAYS_ALLOWED = ["LICENSE*"]
 
 
-def git(args, cwd=ROOT, input=None):
+def git(args, cwd=SOURCE_ROOT, input=None):
     result = subprocess.run(
         ["git", *args],
         cwd=cwd,
@@ -112,8 +117,8 @@ def find_allowance(allowances, path):
 
 
 def is_fast(path):
-    """Whether `path` is inside a `src/fast/` directory, where gpui-fast's code lives."""
-    return "/src/fast/" in path
+    """Whether this generated file is owned performance or extension source."""
+    return "/src/fast/" in path or "/src/extensions/" in path
 
 
 def is_always_allowed(path):
@@ -137,13 +142,16 @@ def upstream_blobs(repo, commit, tracked):
 
 def our_blobs(tracked):
     """Maps each file in our working tree to the blob id it would be committed as."""
-    output = git(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *tracked])
-    paths = sorted({path for path in output.decode().split("\0") if path})
-    paths = [path for path in paths if os.path.lexists(os.path.join(ROOT, path))]
+    paths = sorted(
+        path.relative_to(ROOT).as_posix()
+        for directory in tracked
+        for path in Path(ROOT, directory).rglob("*")
+        if path.is_file() or path.is_symlink()
+    )
     blobs = {}
     regular = [path for path in paths if not os.path.islink(os.path.join(ROOT, path))]
     if regular:
-        hashes = git(["hash-object", "--stdin-paths"], input="\n".join(regular).encode())
+        hashes = git(["hash-object", "--stdin-paths"], input="\n".join(os.path.join(ROOT, path) for path in regular).encode())
         for path, blob in zip(regular, hashes.decode().split()):
             blobs[path] = blob
     for path in paths:
@@ -217,7 +225,7 @@ def diff_hunk_lines(old_lines, new_lines):
 # hunks that only remove lines, and hunks that only change `use` declarations
 # or blank lines, which follow from the code around them; lines that differ
 # only by visibility are not in the normalized diff at all.
-NAMES_FAST = re.compile(r"\bfast(\b|_)")
+NAMES_FAST = re.compile(r"\b(?:fast|extensions)(\b|_)")
 USE = re.compile(r"^\s*(pub(\([\w:]+\))?\s+)?use\s")
 
 
@@ -275,7 +283,7 @@ def method_hooks(path, old, new):
     return found
 
 
-GLOB_FROM_FAST = re.compile(rb"\buse\s+[\w:]*\bfast(::\w+)*::\*")
+GLOB_FROM_FAST = re.compile(rb"\buse\s+[\w:]*\b(?:fast|extensions)(::\w+)*::\*")
 # Inside `fast/`, `use` lines are fine but globs of any kind, `use super::*` included, are not.
 ANY_GLOB = re.compile(rb"^\s*(pub(\([\w:]+\))?\s+)?use\s+[^;]*::\*")
 
@@ -286,7 +294,7 @@ def fast_globs(paths):
     for path in paths:
         if not path.endswith(".rs"):
             continue
-        in_fast = "/src/fast/" in path
+        in_fast = is_fast(path)
         with open(os.path.join(ROOT, path), "rb") as file:
             for number, line in enumerate(file, 1):
                 if GLOB_FROM_FAST.search(line) or (in_fast and ANY_GLOB.search(line)):
@@ -296,14 +304,14 @@ def fast_globs(paths):
 
 # A `use` of `fast` outside a `fast/` directory, restricted or not; only a
 # public `pub use` export is allowed there.
-USE_OF_FAST = re.compile(rb"^\s*(pub\s*\([^)]*\)\s*)?use\s+[^;]*\bfast::")
+USE_OF_FAST = re.compile(rb"^\s*(pub\s*\([^)]*\)\s*)?use\s+[^;]*\b(?:fast|extensions)::")
 
 
 def fast_imports(paths):
     """Finds `use ...fast::...` lines outside `src/fast/`, where fast code is named by its full path."""
     found = []
     for path in paths:
-        if not path.endswith(".rs") or "/src/fast/" in path:
+        if not path.endswith(".rs") or is_fast(path):
             continue
         with open(os.path.join(ROOT, path), "rb") as file:
             for number, line in enumerate(file, 1):
@@ -313,6 +321,7 @@ def fast_imports(paths):
 
 
 def main():
+    global ROOT
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--zed", metavar="PATH", help="compare against a zed checkout at the recorded zed_commit")
     parser.add_argument("--max-hunk", type=int, default=8, help="most lines one hunk may add (default 8)")
@@ -320,7 +329,18 @@ def main():
     parser.add_argument("--max-removed", type=int, default=20, help="most lines a file may remove (default 20)")
     parser.add_argument("--report", action="store_true", help="print the table without failing")
     parser.add_argument("--all", action="store_true", help="also list files that pass")
+    parser.add_argument("--pristine-only", action="store_true", help="check tracked upstream bytes without assembling")
     args = parser.parse_args()
+
+    try:
+        pristine = verify_pristine(Path(SOURCE_ROOT))
+        print(f"Pristine upstream: {len(pristine)} files match the recorded import exactly.")
+        if args.pristine_only:
+            return 0
+        ROOT = str(assemble(Path(SOURCE_ROOT)))
+    except (AssemblyError, OSError, ValueError) as error:
+        print(error, file=sys.stderr)
+        return 1
 
     config = read_upstream_config()
     allowances = read_allowlist()
@@ -328,7 +348,7 @@ def main():
     if args.zed:
         repo, commit = os.path.abspath(os.path.expanduser(args.zed)), config["zed_commit"]
     else:
-        repo, commit = ROOT, config["import_commit"]
+        repo, commit = SOURCE_ROOT, config["import_commit"]
 
     theirs = upstream_blobs(repo, commit, tracked)
     ours = our_blobs(tracked)
@@ -336,7 +356,7 @@ def main():
     changed = sorted(
         path
         for path in set(theirs) | set(ours)
-        if not is_fast(path)
+        if not is_fast(path) and not is_always_allowed(path)
         and (path not in theirs or path not in ours or theirs[path][0] != ours[path])
     )
     upstream_contents = read_blobs(repo, [theirs[path][0] for path in changed if path in theirs and path in ours])
