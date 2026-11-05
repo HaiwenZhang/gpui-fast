@@ -1,7 +1,7 @@
-#[cfg(feature = "wayland")]
-use crate::linux::WaylandWindow;
 #[cfg(feature = "x11")]
 use crate::linux::X11Window;
+#[cfg(feature = "wayland")]
+use crate::linux::wayland::windows::WaylandWindow;
 #[cfg(any(feature = "x11", feature = "wayland"))]
 use anyhow::Context as _;
 #[cfg(feature = "x11")]
